@@ -140,6 +140,7 @@
  *                      and conditional cmdtype member of piped_log struct
  * 20051115.24 (2.2.15) Add forward member to proxy_conn_rec
  * 20051115.25 (2.2.17) Add errstatuses member to proxy_balancer
+ * 20120211.15 (gdc backport, not bumping minor) Add dav_join_error()
  */
 
 #define MODULE_MAGIC_COOKIE 0x41503232UL /* "AP22" */
