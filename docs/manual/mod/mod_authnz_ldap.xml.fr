@@ -847,6 +847,27 @@ AuthLDAPBindSASLMech "GSSAPI"
 </usage>
 </directivesynopsis>
 
+<!-- TODO: Translate me! -->
+<directivesynopsis>
+<name>AuthLDAPBindSASLInteract</name>
+<description>Optional command to run when SASL requests interaction to obtain credentials</description>
+<syntax>AuthLDAPBindSASLInteract <em>command</em></syntax>
+<contextlist><context>directory</context><context>.htaccess</context>
+</contextlist>
+<override>AuthConfig</override>
+
+<usage>
+    <p>An optional command to run when SASL
+    requests interaction to obtain credentials.</p>
+
+<example><pre>
+#Initialize Kerberos Credentials Cache using a key from a keytab for given principal
+AuthLDAPBindSASLInteract "/usr/bin/kinit -k -t /etc/httpd/conf/krb5.keytab host/example.com"
+</pre></example>
+
+</usage>
+</directivesynopsis>
+
 <directivesynopsis>
 <name>AuthLDAPCharsetConfig</name>
 <description>Chemin du fichier de configuration de la correspondance

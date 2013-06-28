@@ -200,6 +200,9 @@ static apr_status_t uldap_connection_cleanup(void *param)
         if (ldc->bindsaslmech) {
             free((void*)ldc->bindsaslmech);
         }
+        if (ldc->bindsaslinteract) {
+            free((void*)ldc->bindsaslinteract);
+        }
 
         /* unlock this entry */
         uldap_connection_close(ldc);
@@ -338,7 +341,20 @@ static int uldap_sasl_interact(LDAP *ld,
                                void *defaults,
                                void *sasl_interact)
 {
-    return LDAP_SUCCESS;
+    /* TODO: Rewrite with apr_tokenize_to_argv() and apr_proc_create() */
+    char *bindsaslinteract = (char *)defaults;
+
+    if (bindsaslinteract == NULL)
+        return LDAP_SUCCESS;
+
+    switch (system(bindsaslinteract)) {
+    case -1:
+        perror(bindsaslinteract);
+        return LDAP_PARAM_ERROR;
+    case 0:
+        return LDAP_SUCCESS;
+    }
+    return LDAP_LOCAL_ERROR;
 }
 
 /*
@@ -397,7 +413,7 @@ static int uldap_connection_open(request_rec *r,
                                               NULL,
                                               LDAP_SASL_QUIET,
                                               uldap_sasl_interact,
-                                              NULL);
+                                              (void *)ldc->bindsaslinteract);
         } else {
             rc = ldap_simple_bind_s(ldc->ldap,
                                     (char *)ldc->binddn,
@@ -482,7 +498,7 @@ static util_ldap_connection_t *
             uldap_connection_find(request_rec *r,
                                   const char *host, int port,
                                   const char *binddn, const char *bindpw,
-                                  const char *bindsaslmech,
+                                  const char *bindsaslmech, const char *bindsaslinteract,
                                   deref_options deref, int secure)
 {
     struct util_ldap_connection_t *l, *p; /* To traverse the linked list */
@@ -516,6 +532,8 @@ static util_ldap_connection_t *
                                              && !strcmp(l->bindpw, bindpw)))
             && ((!l->bindsaslmech && !bindsaslmech) || (l->bindsaslmech && bindsaslmech
                                              && !strcmp(l->bindsaslmech, bindsaslmech)))
+            && ((!l->bindsaslinteract && !bindsaslinteract) || (l->bindsaslinteract && bindsaslinteract
+                                             && !strcmp(l->bindsaslinteract, bindsaslinteract)))
             && (l->deref == deref) && (l->secure == secureflag)
             && !compare_client_certs(st->client_certs, l->client_certs))
         {
@@ -549,6 +567,7 @@ static util_ldap_connection_t *
                 util_ldap_strdup((char**)&(l->binddn), binddn);
                 util_ldap_strdup((char**)&(l->bindpw), bindpw);
                 util_ldap_strdup((char**)&(l->bindsaslmech), bindsaslmech);
+                util_ldap_strdup((char**)&(l->bindsaslinteract), bindsaslinteract);
                 break;
             }
 #if APR_HAS_THREADS
@@ -597,6 +616,7 @@ static util_ldap_connection_t *
         util_ldap_strdup((char**)&(l->binddn), binddn);
         util_ldap_strdup((char**)&(l->bindpw), bindpw);
         util_ldap_strdup((char**)&(l->bindsaslmech), bindsaslmech);
+        util_ldap_strdup((char**)&(l->bindsaslinteract), bindsaslinteract);
 
         /* The security mode after parsing the URL will always be either
          * APR_LDAP_NONE (ldap://) or APR_LDAP_SSL (ldaps://).
