@@ -790,10 +790,15 @@ LDAP</description>
 <override>AuthConfig</override>
 
 <usage>
+<!-- TODO: Translate me!
     <p>Cette directive permet de d&eacute;finir un DN optionnel pour se
     connecter au serveur afin d'y rechercher des entr&eacute;es. Si aucun DN
     n'est sp&eacute;cifi&eacute;, <module>mod_authnz_ldap</module> tentera une
     connexion anonyme.</p>
+-->
+    <p>An optional DN used to bind to the server when searching for
+    entries. If not provided, and simple bind (not SASL) is used,
+    <module>mod_authnz_ldap</module> will use an anonymous bind.</p>
 </usage>
 </directivesynopsis>
 
@@ -816,6 +821,29 @@ connexion</description>
     module="mod_authnz_ldap">AuthLDAPBindPassword</directive> que si
     vous en avez vraiment besoin pour effectuer une recherche dans
     l'annuaire.</p>
+</usage>
+</directivesynopsis>
+
+<!-- TODO: Translate me! -->
+<directivesynopsis>
+<name>AuthLDAPBindSASLMech</name>
+<description>Optional SASL mechanism to use in binding to the LDAP server</description>
+<syntax>AuthLDAPBindSASLMech <em>sasl-mech</em></syntax>
+<contextlist><context>directory</context><context>.htaccess</context>
+</contextlist>
+<override>AuthConfig</override>
+
+<usage>
+    <p>An optional SASL mechanism used to bind to the server when
+    searching for entries. Multiple mechanisms can be used,
+    separated with commas. If not provided,
+    <module>mod_authnz_ldap</module> will use simple bind.</p>
+
+<example><pre>
+#Authenticate with Kerberos GSSAPI
+AuthLDAPBindSASLMech "GSSAPI"
+</pre></example>
+
 </usage>
 </directivesynopsis>
 
