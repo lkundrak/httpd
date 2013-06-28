@@ -64,6 +64,7 @@ typedef struct {
     char *binddn;                   /* DN to bind to server (can be NULL) */
     char *bindpw;                   /* Password to bind to server (can be NULL) */
     char *bindsaslmech;             /* SASL Mechanism to use for server bind (can be NULL) */
+    char *bindsaslinteract;         /* Command to run when SASL requests interaction to obtain credentials. */
     int bind_authoritative;         /* If true, will return errors when bind fails */
 
     int user_is_dn;                 /* If true, connection->user is DN instead of userid */
@@ -311,6 +312,7 @@ static void *create_authnz_ldap_dir_config(apr_pool_t *p, char *d)
     sec->binddn = NULL;
     sec->bindpw = NULL;
     sec->bindsaslmech = NULL;
+    sec->bindsaslinteract = NULL;
     sec->bind_authoritative = 1;
     sec->deref = always;
     sec->group_attrib_is_dn = 1;
@@ -422,7 +424,8 @@ start_over:
     /* There is a good AuthLDAPURL, right? */
     if (sec->host) {
         ldc = util_ldap_connection_find(r, sec->host, sec->port,
-                                       sec->binddn, sec->bindpw, sec->bindsaslmech,
+                                       sec->binddn, sec->bindpw,
+                                       sec->bindsaslmech, sec->bindsaslinteract,
                                        sec->deref, sec->secure);
     }
     else {
@@ -681,7 +684,8 @@ static int authz_ldap_check_user_access(request_rec *r)
 
     if (sec->host) {
         ldc = util_ldap_connection_find(r, sec->host, sec->port,
-                                       sec->binddn, sec->bindpw, sec->bindsaslmech,
+                                       sec->binddn, sec->bindpw,
+                                       sec->bindsaslmech, sec->bindsaslinteract,
                                        sec->deref, sec->secure);
         apr_pool_cleanup_register(r->pool, ldc,
                                   authnz_ldap_cleanup_connection_close,
@@ -1226,6 +1230,10 @@ static const command_rec authnz_ldap_cmds[] =
     AP_INIT_TAKE1("AuthLDAPBindSASLMech", ap_set_string_slot,
                   (void *)APR_OFFSETOF(authn_ldap_config_t, bindsaslmech), OR_AUTHCFG,
                   "SASL Mechanism to use to bind to LDAP server. If not provided, simple authentication will be done."),
+
+    AP_INIT_TAKE1("AuthLDAPBindSASLInteract", ap_set_string_slot,
+                  (void *)APR_OFFSETOF(authn_ldap_config_t, bindsaslinteract), OR_AUTHCFG,
+                  "Command to run when SASL requests interaction to obtain credentials."),
 
     AP_INIT_FLAG("AuthLDAPBindAuthoritative", ap_set_flag_slot,
                   (void *)APR_OFFSETOF(authn_ldap_config_t, bind_authoritative), OR_AUTHCFG,
