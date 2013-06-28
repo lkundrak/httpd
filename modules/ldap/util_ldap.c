@@ -190,12 +190,15 @@ static apr_status_t uldap_connection_cleanup(void *param)
         /* unbind and disconnect from the LDAP server */
         uldap_connection_unbind(ldc);
 
-        /* free the username and password */
+        /* free the username, password and SASL mechanism*/
         if (ldc->bindpw) {
             free((void*)ldc->bindpw);
         }
         if (ldc->binddn) {
             free((void*)ldc->binddn);
+        }
+        if (ldc->bindsaslmech) {
+            free((void*)ldc->bindsaslmech);
         }
 
         /* unlock this entry */
@@ -333,6 +336,14 @@ static int uldap_connection_init(request_rec *r,
     return(rc);
 }
 
+static int uldap_sasl_interact(LDAP *ld,
+                               unsigned flags,
+                               void *defaults,
+                               void *sasl_interact)
+{
+    return LDAP_SUCCESS;
+}
+
 /*
  * Connect to the LDAP server and binds. Does not connect if already
  * connected (i.e. ldc->ldap is non-NULL.) Does not bind if already bound.
@@ -380,9 +391,21 @@ static int uldap_connection_open(request_rec *r,
       */
     for (failures=0; failures<10; failures++)
     {
-        rc = ldap_simple_bind_s(ldc->ldap,
-                                (char *)ldc->binddn,
-                                (char *)ldc->bindpw);
+        if ((char *)ldc->bindsaslmech)
+        {
+            rc = ldap_sasl_interactive_bind_s(ldc->ldap,
+                                              (char *)ldc->binddn,
+                                              (char *)ldc->bindsaslmech,
+                                              NULL,
+                                              NULL,
+                                              LDAP_SASL_QUIET,
+                                              uldap_sasl_interact,
+                                              NULL);
+        } else {
+            rc = ldap_simple_bind_s(ldc->ldap,
+                                    (char *)ldc->binddn,
+                                    (char *)ldc->bindpw);
+        }
         if (!AP_LDAP_IS_SERVER_DOWN(rc)) {
             break;
         } else if (failures == 5) {
@@ -401,7 +424,7 @@ static int uldap_connection_open(request_rec *r,
     if (LDAP_SUCCESS != rc)
     {
        uldap_connection_unbind(ldc);
-        ldc->reason = "LDAP: ldap_simple_bind_s() failed";
+        ldc->reason = "LDAP: bind failed";
     }
     else {
         ldc->bound = 1;
@@ -462,6 +485,7 @@ static util_ldap_connection_t *
             uldap_connection_find(request_rec *r,
                                   const char *host, int port,
                                   const char *binddn, const char *bindpw,
+                                  const char *bindsaslmech,
                                   deref_options deref, int secure)
 {
     struct util_ldap_connection_t *l, *p; /* To traverse the linked list */
@@ -493,6 +517,8 @@ static util_ldap_connection_t *
                                              && !strcmp(l->binddn, binddn)))
             && ((!l->bindpw && !bindpw) || (l->bindpw && bindpw
                                              && !strcmp(l->bindpw, bindpw)))
+            && ((!l->bindsaslmech && !bindsaslmech) || (l->bindsaslmech && bindsaslmech
+                                             && !strcmp(l->bindsaslmech, bindsaslmech)))
             && (l->deref == deref) && (l->secure == secureflag)
             && !compare_client_certs(st->client_certs, l->client_certs))
         {
@@ -525,6 +551,7 @@ static util_ldap_connection_t *
                 l->bound = 0;
                 util_ldap_strdup((char**)&(l->binddn), binddn);
                 util_ldap_strdup((char**)&(l->bindpw), bindpw);
+                util_ldap_strdup((char**)&(l->bindsaslmech), bindsaslmech);
                 break;
             }
 #if APR_HAS_THREADS
@@ -572,6 +599,7 @@ static util_ldap_connection_t *
         l->deref = deref;
         util_ldap_strdup((char**)&(l->binddn), binddn);
         util_ldap_strdup((char**)&(l->bindpw), bindpw);
+        util_ldap_strdup((char**)&(l->bindsaslmech), bindsaslmech);
 
         /* The security mode after parsing the URL will always be either
          * APR_LDAP_NONE (ldap://) or APR_LDAP_SSL (ldaps://).

@@ -63,6 +63,7 @@ typedef struct {
     deref_options deref;            /* how to handle alias dereferening */
     char *binddn;                   /* DN to bind to server (can be NULL) */
     char *bindpw;                   /* Password to bind to server (can be NULL) */
+    char *bindsaslmech;             /* SASL Mechanism to use for server bind (can be NULL) */
     int bind_authoritative;         /* If true, will return errors when bind fails */
 
     int user_is_dn;                 /* If true, connection->user is DN instead of userid */
@@ -309,6 +310,7 @@ static void *create_authnz_ldap_dir_config(apr_pool_t *p, char *d)
     sec->host = NULL;
     sec->binddn = NULL;
     sec->bindpw = NULL;
+    sec->bindsaslmech = NULL;
     sec->bind_authoritative = 1;
     sec->deref = always;
     sec->group_attrib_is_dn = 1;
@@ -420,8 +422,8 @@ start_over:
     /* There is a good AuthLDAPURL, right? */
     if (sec->host) {
         ldc = util_ldap_connection_find(r, sec->host, sec->port,
-                                       sec->binddn, sec->bindpw, sec->deref,
-                                       sec->secure);
+                                       sec->binddn, sec->bindpw, sec->bindsaslmech,
+                                       sec->deref, sec->secure);
     }
     else {
         ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
@@ -677,11 +679,10 @@ static int authz_ldap_check_user_access(request_rec *r)
     }
 
 
-
     if (sec->host) {
         ldc = util_ldap_connection_find(r, sec->host, sec->port,
-                                       sec->binddn, sec->bindpw, sec->deref,
-                                       sec->secure);
+                                       sec->binddn, sec->bindpw, sec->bindsaslmech,
+                                       sec->deref, sec->secure);
         apr_pool_cleanup_register(r->pool, ldc,
                                   authnz_ldap_cleanup_connection_close,
                                   apr_pool_cleanup_null);
@@ -1221,6 +1222,10 @@ static const command_rec authnz_ldap_cmds[] =
     AP_INIT_TAKE1("AuthLDAPBindPassword", ap_set_string_slot,
                   (void *)APR_OFFSETOF(authn_ldap_config_t, bindpw), OR_AUTHCFG,
                   "Password to use to bind to LDAP server. If not provided, will do an anonymous bind."),
+
+    AP_INIT_TAKE1("AuthLDAPBindSASLMech", ap_set_string_slot,
+                  (void *)APR_OFFSETOF(authn_ldap_config_t, bindsaslmech), OR_AUTHCFG,
+                  "SASL Mechanism to use to bind to LDAP server. If not provided, simple authentication will be done."),
 
     AP_INIT_FLAG("AuthLDAPBindAuthoritative", ap_set_flag_slot,
                   (void *)APR_OFFSETOF(authn_ldap_config_t, bind_authoritative), OR_AUTHCFG,
