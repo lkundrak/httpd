@@ -493,39 +493,67 @@ static int uldap_ld_errno(util_ldap_connection_t *ldc)
 }
 
 /*
+ * SASL credentials conversation function. Does nothing really useful yet,
+ * is around just because it is required.
+ *
+ * Always returns LDAP_SUCCESS
+ */
+
+static int uldap_sasl_interact(LDAP *ld,
+                               unsigned flags,
+                               void *defaults,
+                               void *sasl_interact)
+{
+    return LDAP_SUCCESS;
+}
+
+/*
  * Replacement function for ldap_simple_bind_s() with a timeout.
  * To do this in a portable way, we have to use ldap_simple_bind() and
  * ldap_result().
  *
  * Returns LDAP_SUCCESS on success; and an error code on failure
  */
-static int uldap_simple_bind(util_ldap_connection_t *ldc, char *binddn,
-                             char* bindpw, struct timeval *timeout)
+static int uldap_bind(util_ldap_connection_t *ldc, char *binddn,
+                      char* bindpw, char *bindsaslmech,
+                      struct timeval *timeout)
 {
-    LDAPMessage *result;
     int rc;
-    int msgid = ldap_simple_bind(ldc->ldap, binddn, bindpw);
-    if (msgid == -1) {
-        ldc->reason = "LDAP: ldap_simple_bind() failed";
-        return uldap_ld_errno(ldc);
+
+    if (bindsaslmech) {
+        rc = ldap_sasl_interactive_bind_s(ldc->ldap, binddn, bindsaslmech,
+                                          NULL, NULL, LDAP_SASL_QUIET,
+                                          uldap_sasl_interact, NULL);
+        if (rc == -1) {
+            ldc->reason = "LDAP: ldap_sasl_interactive_bind_s() failed";
+            /* -1 is LDAP_SERVER_DOWN in openldap, use something else */
+            return uldap_ld_errno(ldc);
+        }
+    } else {
+        LDAPMessage *result;
+        int msgid;
+
+        msgid = ldap_simple_bind(ldc->ldap, binddn, bindpw);
+        if (msgid == -1) {
+            ldc->reason = "LDAP: ldap_simple_bind() failed";
+            return uldap_ld_errno(ldc);
+        }
+        rc = ldap_result(ldc->ldap, msgid, 0, timeout, &result);
+        if (rc == -1) {
+            ldc->reason = "LDAP: ldap_simple_bind() result retrieval failed";
+            /* -1 is LDAP_SERVER_DOWN in openldap, use something else */
+            return uldap_ld_errno(ldc);
+        } else if (rc == 0) {
+            ldc->reason = "LDAP: ldap_simple_bind() timed out";
+            rc = LDAP_TIMEOUT;
+        } else if (ldap_parse_result(ldc->ldap, result, &rc, NULL, NULL, NULL,
+                                     NULL, 1) == -1) {
+            ldc->reason = "LDAP: ldap_simple_bind() parse result failed";
+            return uldap_ld_errno(ldc);
+        }
     }
-    rc = ldap_result(ldc->ldap, msgid, 0, timeout, &result);
-    if (rc == -1) {
-        ldc->reason = "LDAP: ldap_simple_bind() result retrieval failed";
-        /* -1 is LDAP_SERVER_DOWN in openldap, use something else */
-        return uldap_ld_errno(ldc);
-    }
-    else if (rc == 0) {
-        ldc->reason = "LDAP: ldap_simple_bind() timed out";
-        rc = LDAP_TIMEOUT;
-    } else if (ldap_parse_result(ldc->ldap, result, &rc, NULL, NULL, NULL,
-                                 NULL, 1) == -1) {
-        ldc->reason = "LDAP: ldap_simple_bind() parse result failed";
-        return uldap_ld_errno(ldc);
-    }
-    else { 
-        ap_log_rerror(APLOG_MARK, APLOG_TRACE5, 0, ldc->r, "LDC %pp bind", ldc);
-    }
+
+    ap_log_rerror(APLOG_MARK, APLOG_TRACE5, 0, ldc->r, "LDC %pp bind", ldc);
     return rc;
 }
 
@@ -588,8 +616,8 @@ static int uldap_connection_open(request_rec *r,
         if (failures > 0 && st->retry_delay > 0) {
             apr_sleep(st->retry_delay);
         }
-        rc = uldap_simple_bind(ldc, (char *)ldc->binddn, (char *)ldc->bindpw,
-                               st->opTimeout);
+        rc = uldap_bind(ldc, (char *)ldc->binddn, (char *)ldc->bindpw,
+                        (char *)ldc->bindsaslmech, st->opTimeout);
 
         if (rc == LDAP_SUCCESS) break;
 
@@ -628,7 +656,7 @@ static int uldap_connection_open(request_rec *r,
     if (LDAP_SUCCESS != rc)
     {
         uldap_connection_unbind(ldc);
-        ldc->reason = "LDAP: ldap_simple_bind() failed";
+        ldc->reason = "LDAP: bind failed";
     }
     else {
         ldc->bound = 1;
@@ -693,6 +721,7 @@ static util_ldap_connection_t *
             uldap_connection_find(request_rec *r,
                                   const char *host, int port,
                                   const char *binddn, const char *bindpw,
+                                  const char *bindsaslmech,
                                   deref_options deref, int secure)
 {
     struct util_ldap_connection_t *l, *p; /* To traverse the linked list */
@@ -726,6 +755,8 @@ static util_ldap_connection_t *
                                              && !strcmp(l->binddn, binddn)))
             && ((!l->bindpw && !bindpw) || (l->bindpw && bindpw
                                              && !strcmp(l->bindpw, bindpw)))
+            && ((!l->bindsaslmech && !bindsaslmech) || (l->bindsaslmech && bindsaslmech
+                                             && !strcmp(l->bindsaslmech, bindsaslmech)))
             && (l->deref == deref) && (l->secure == secureflag)
             && !compare_client_certs(dc->client_certs, l->client_certs))
         {
@@ -785,7 +816,7 @@ static util_ldap_connection_t *
                 l->must_rebind = 1;
                 util_ldap_strdup((char**)&(l->binddn), binddn);
                 util_ldap_strdup((char**)&(l->bindpw), bindpw);
-
+                util_ldap_strdup((char**)&(l->bindsaslmech), bindsaslmech);
                 break;
             }
 #if APR_HAS_THREADS
@@ -837,6 +868,7 @@ static util_ldap_connection_t *
         l->deref = deref;
         util_ldap_strdup((char**)&(l->binddn), binddn);
         util_ldap_strdup((char**)&(l->bindpw), bindpw);
+        util_ldap_strdup((char**)&(l->bindsaslmech), bindsaslmech);
         l->ChaseReferrals = dc->ChaseReferrals;
         l->ReferralHopLimit = dc->ReferralHopLimit;
 
@@ -1790,8 +1822,8 @@ start_over:
      * fails, it means that the password is wrong (the dn obviously
      * exists, since we just retrieved it)
      */
-    result = uldap_simple_bind(ldc, (char *)*binddn, (char *)bindpw,
-                               st->opTimeout);
+    result = uldap_bind(ldc, (char *)*binddn, (char *)bindpw, NULL,
+                        st->opTimeout);
     if (AP_LDAP_IS_SERVER_DOWN(result) ||
         (result == LDAP_TIMEOUT && failures == 0)) {
         if (AP_LDAP_IS_SERVER_DOWN(result))
