@@ -60,6 +60,7 @@ typedef struct {
     char *binddn;                   /* DN to bind to server (can be NULL) */
     char *bindpw;                   /* Password to bind to server (can be NULL) */
     char *bindsaslmech;             /* SASL Mechanism to use for server bind (can be NULL) */
+    char *bindsaslinteract;         /* Command to run when SASL requests interaction to obtain credentials. */
     int bind_authoritative;         /* If true, will return errors when bind fails */
 
     int user_is_dn;                 /* If true, r->user is replaced by DN during authn */
@@ -346,6 +347,7 @@ static void *create_authnz_ldap_dir_config(apr_pool_t *p, char *d)
     sec->binddn = NULL;
     sec->bindpw = NULL;
     sec->bindsaslmech = NULL;
+    sec->bindsaslinteract = NULL;
     sec->bind_authoritative = 1;
     sec->deref = always;
     sec->group_attrib_is_dn = 1;
@@ -442,6 +444,7 @@ static util_ldap_connection_t *get_connection_for_authz(request_rec *r, enum aut
     char *binddn = sec->binddn;
     char *bindpw = sec->bindpw;
     char *bindsaslmech = sec->bindsaslmech;
+    char *bindsaslinteract = sec->bindsaslinteract;
 
     /* If the per-request config isn't set, we didn't authenticate this user, and leave the default credentials */
     if (req && req->password &&
@@ -451,10 +454,12 @@ static util_ldap_connection_t *get_connection_for_authz(request_rec *r, enum aut
             binddn = req->dn;
             bindpw = req->password;
             bindsaslmech = NULL;
+            bindsaslinteract = NULL;
     }
 
     return util_ldap_connection_find(r, sec->host, sec->port,
-                                     binddn, bindpw, bindsaslmech,
+                                     binddn, bindpw,
+                                     bindsaslmech, bindsaslinteract,
                                      sec->deref, sec->secure);
 }
 /*
@@ -505,14 +510,17 @@ static authn_status authn_ldap_check_password(request_rec *r, const char *user,
         const char *binddn = sec->binddn;
         const char *bindpw = sec->bindpw;
         const char *bindsaslmech = sec->bindsaslmech;
+        const char *bindsaslinteract = sec->bindsaslinteract;
         if (sec->initial_bind_as_user) {
             bindpw = password;
             binddn = ldap_determine_binddn(r, user);
             bindsaslmech = NULL;
+            bindsaslinteract = NULL;
         }
 
         ldc = util_ldap_connection_find(r, sec->host, sec->port,
-                                       binddn, bindpw, bindsaslmech,
+                                       binddn, bindpw,
+                                       bindsaslmech, bindsaslinteract,
                                        sec->deref, sec->secure);
     }
     else {
@@ -1714,6 +1722,10 @@ static const command_rec authnz_ldap_cmds[] =
     AP_INIT_TAKE1("AuthLDAPBindSASLMech", ap_set_string_slot,
                   (void *)APR_OFFSETOF(authn_ldap_config_t, bindsaslmech), OR_AUTHCFG,
                   "SASL Mechanism to use to bind to LDAP server. If not provided, simple authentication will be done."),
+
+    AP_INIT_TAKE1("AuthLDAPBindSASLInteract", ap_set_string_slot,
+                  (void *)APR_OFFSETOF(authn_ldap_config_t, bindsaslinteract), OR_AUTHCFG,
+                  "Command to run when SASL requests interaction to obtain credentials."),
 
     AP_INIT_FLAG("AuthLDAPBindAuthoritative", ap_set_flag_slot,
                   (void *)APR_OFFSETOF(authn_ldap_config_t, bind_authoritative), OR_AUTHCFG,

@@ -191,6 +191,14 @@ for HTTP Basic authentication.</description>
         <td>An optional SASL mechanism to use for bind
         with during the search phase.</td>
       </tr>
+
+      <tr>
+        <td><directive
+        module="mod_authnz_ldap">AuthLDAPBindSASLInteract</directive></td>
+
+        <td>An optional command to run when SASL
+        requests interaction to obtain credentials.</td>
+      </tr>
     </table>
 </section>
 
@@ -967,6 +975,26 @@ AuthLDAPBindPassword "exec:/path/to/otherProgram argument1"
 <example><pre>
 #Authenticate with Kerberos GSSAPI
 AuthLDAPBindSASLMech "GSSAPI"
+</pre></example>
+
+</usage>
+</directivesynopsis>
+
+<directivesynopsis>
+<name>AuthLDAPBindSASLInteract</name>
+<description>Optional command to run when SASL requests interaction to obtain credentials</description>
+<syntax>AuthLDAPBindSASLInteract <em>command</em></syntax>
+<contextlist><context>directory</context><context>.htaccess</context>
+</contextlist>
+<override>AuthConfig</override>
+
+<usage>
+    <p>An optional command to run when SASL
+    requests interaction to obtain credentials.</p>
+
+<example><pre>
+#Initialize Kerberos Credentials Cache using a key from a keytab for given principal
+AuthLDAPBindSASLInteract "/usr/bin/kinit -k -t /etc/httpd/conf/krb5.keytab host/example.com"
 </pre></example>
 
 </usage>

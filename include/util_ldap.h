@@ -118,6 +118,7 @@ typedef struct util_ldap_connection_t {
     const char *binddn;                 /* DN to bind to server (can be NULL) */
     const char *bindpw;                 /* Password to bind to server (can be NULL) */
     const char *bindsaslmech;           /* SASL Mechanism to use for server bind (can be NULL) */
+    char *bindsaslinteract;             /* Command to run when SASL requests interaction to obtain credentials (can be NULL) */
 
     int bound;                          /* Flag to indicate whether this connection is bound yet */
 
@@ -243,7 +244,8 @@ APR_DECLARE_OPTIONAL_FN(apr_status_t,uldap_connection_unbind,(void *param));
  *                                                           int netscapessl, int starttls)
  */
 APR_DECLARE_OPTIONAL_FN(util_ldap_connection_t *,uldap_connection_find,(request_rec *r, const char *host, int port,
-                                                  const char *binddn, const char *bindpw, const char *bindsaslmech,
+                                                  const char *binddn, const char *bindpw,
+                                                  const char *bindsaslmech, const char *bindsaslinteract,
                                                   deref_options deref, int secure));
 
 /**

@@ -493,18 +493,57 @@ static int uldap_ld_errno(util_ldap_connection_t *ldc)
 }
 
 /*
- * SASL credentials conversation function. Does nothing really useful yet,
- * is around just because it is required.
+ * SASL credentials conversation function.
+ * Calls external helper if specified, otherwise just returns success.
  *
- * Always returns LDAP_SUCCESS
+ * Returns LDAP_SUCCESS on success; and an error code on failure
  */
-
 static int uldap_sasl_interact(LDAP *ld,
                                unsigned flags,
                                void *defaults,
                                void *sasl_interact)
 {
-    return LDAP_SUCCESS;
+    char *bindsaslinteract = (char *)defaults;
+    int ret = LDAP_SUCCESS;
+    apr_pool_t *pool;
+    apr_proc_t proc;
+    apr_procattr_t *procattr;
+    apr_exit_why_e why;
+    int code;
+    char **argv;
+
+    if (bindsaslinteract == NULL)
+        return ret;
+
+    apr_pool_create(&pool, NULL);
+
+    if (apr_tokenize_to_argv(bindsaslinteract, &argv, pool) != APR_SUCCESS) {
+        ret = LDAP_PARAM_ERROR;
+        goto out;
+    }
+
+    if (apr_procattr_create(&procattr, pool) != APR_SUCCESS) {
+        ret = LDAP_LOCAL_ERROR;
+        goto out;
+    }
+
+    if (apr_proc_create(&proc, argv[0],(const char * const*)argv,
+                        NULL, procattr, pool) != APR_SUCCESS) {
+        ret = LDAP_LOCAL_ERROR;
+        goto out;
+    }
+
+    if (apr_proc_wait(&proc, &code, &why, APR_WAIT) != APR_CHILD_DONE) {
+        ret = LDAP_LOCAL_ERROR;
+        goto out;
+    }
+
+    if (why != APR_PROC_EXIT)
+        ret = LDAP_LOCAL_ERROR;
+
+out:
+    apr_pool_destroy(pool);
+    return ret;
 }
 
 /*
@@ -514,8 +553,9 @@ static int uldap_sasl_interact(LDAP *ld,
  *
  * Returns LDAP_SUCCESS on success; and an error code on failure
  */
-static int uldap_bind(util_ldap_connection_t *ldc, char *binddn,
-                      char* bindpw, char *bindsaslmech,
+static int uldap_bind(util_ldap_connection_t *ldc,
+                      char *binddn, char* bindpw,
+                      char *bindsaslmech, char *bindsaslinteract,
                       struct timeval *timeout)
 {
     int rc;
@@ -523,7 +563,7 @@ static int uldap_bind(util_ldap_connection_t *ldc, char *binddn,
     if (bindsaslmech) {
         rc = ldap_sasl_interactive_bind_s(ldc->ldap, binddn, bindsaslmech,
                                           NULL, NULL, LDAP_SASL_QUIET,
-                                          uldap_sasl_interact, NULL);
+                                          uldap_sasl_interact, bindsaslinteract);
         if (rc == -1) {
             ldc->reason = "LDAP: ldap_sasl_interactive_bind_s() failed";
             /* -1 is LDAP_SERVER_DOWN in openldap, use something else */
@@ -617,7 +657,8 @@ static int uldap_connection_open(request_rec *r,
             apr_sleep(st->retry_delay);
         }
         rc = uldap_bind(ldc, (char *)ldc->binddn, (char *)ldc->bindpw,
-                        (char *)ldc->bindsaslmech, st->opTimeout);
+                        (char *)ldc->bindsaslmech, (char *)ldc->bindsaslinteract,
+                        st->opTimeout);
 
         if (rc == LDAP_SUCCESS) break;
 
@@ -721,7 +762,7 @@ static util_ldap_connection_t *
             uldap_connection_find(request_rec *r,
                                   const char *host, int port,
                                   const char *binddn, const char *bindpw,
-                                  const char *bindsaslmech,
+                                  const char *bindsaslmech, const char *bindsaslinteract,
                                   deref_options deref, int secure)
 {
     struct util_ldap_connection_t *l, *p; /* To traverse the linked list */
@@ -757,6 +798,8 @@ static util_ldap_connection_t *
                                              && !strcmp(l->bindpw, bindpw)))
             && ((!l->bindsaslmech && !bindsaslmech) || (l->bindsaslmech && bindsaslmech
                                              && !strcmp(l->bindsaslmech, bindsaslmech)))
+            && ((!l->bindsaslinteract && !bindsaslinteract) || (l->bindsaslinteract && bindsaslinteract
+                                             && !strcmp(l->bindsaslinteract, bindsaslinteract)))
             && (l->deref == deref) && (l->secure == secureflag)
             && !compare_client_certs(dc->client_certs, l->client_certs))
         {
@@ -817,6 +860,7 @@ static util_ldap_connection_t *
                 util_ldap_strdup((char**)&(l->binddn), binddn);
                 util_ldap_strdup((char**)&(l->bindpw), bindpw);
                 util_ldap_strdup((char**)&(l->bindsaslmech), bindsaslmech);
+                util_ldap_strdup((char**)&(l->bindsaslinteract), bindsaslinteract);
                 break;
             }
 #if APR_HAS_THREADS
@@ -869,6 +913,7 @@ static util_ldap_connection_t *
         util_ldap_strdup((char**)&(l->binddn), binddn);
         util_ldap_strdup((char**)&(l->bindpw), bindpw);
         util_ldap_strdup((char**)&(l->bindsaslmech), bindsaslmech);
+        util_ldap_strdup((char**)&(l->bindsaslinteract), bindsaslinteract);
         l->ChaseReferrals = dc->ChaseReferrals;
         l->ReferralHopLimit = dc->ReferralHopLimit;
 
@@ -1822,7 +1867,7 @@ start_over:
      * fails, it means that the password is wrong (the dn obviously
      * exists, since we just retrieved it)
      */
-    result = uldap_bind(ldc, (char *)*binddn, (char *)bindpw, NULL,
+    result = uldap_bind(ldc, (char *)*binddn, (char *)bindpw, NULL, NULL,
                         st->opTimeout);
     if (AP_LDAP_IS_SERVER_DOWN(result) ||
         (result == LDAP_TIMEOUT && failures == 0)) {
