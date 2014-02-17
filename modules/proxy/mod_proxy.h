@@ -125,11 +125,6 @@ struct exclude_entry {
     int (*matcher) (struct exclude_entry * This, request_rec *r);
 };
 
-struct noproxy_entry {
-    const char *name;
-    struct apr_sockaddr_t *addr;
-};
-
 typedef struct proxy_balancer  proxy_balancer;
 typedef struct proxy_worker    proxy_worker;
 typedef struct proxy_conn_pool proxy_conn_pool;
