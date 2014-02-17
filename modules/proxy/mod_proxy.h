@@ -115,11 +115,11 @@ struct proxy_alias {
     proxy_balancer *balancer; /* only valid for reverse-proxys */
 };
 
-struct dirconn_entry {
+struct exclude_entry {
     char *name;
     struct in_addr addr, mask;
     struct apr_sockaddr_t *hostaddr;
-    int (*matcher) (struct dirconn_entry * This, request_rec *r);
+    int (*matcher) (struct exclude_entry * This, request_rec *r);
 };
 
 struct noproxy_entry {
