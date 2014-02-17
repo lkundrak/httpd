@@ -45,10 +45,10 @@ typedef struct {
 int PROXY_DECLARE_DATA proxy_lb_workers = 0;
 static int lb_workers_limit = 0;
 
-static int proxy_match_ipaddr(struct dirconn_entry *This, request_rec *r);
-static int proxy_match_domainname(struct dirconn_entry *This, request_rec *r);
-static int proxy_match_hostname(struct dirconn_entry *This, request_rec *r);
-static int proxy_match_word(struct dirconn_entry *This, request_rec *r);
+static int proxy_match_ipaddr(struct exclude_entry *This, request_rec *r);
+static int proxy_match_domainname(struct exclude_entry *This, request_rec *r);
+static int proxy_match_hostname(struct exclude_entry *This, request_rec *r);
+static int proxy_match_word(struct exclude_entry *This, request_rec *r);
 
 APR_IMPLEMENT_OPTIONAL_HOOK_RUN_ALL(proxy, PROXY, int, create_req,
                                    (request_rec *r, request_rec *pr), (r, pr),
@@ -553,7 +553,7 @@ static const char *
 }
 
 /* Return TRUE if addr represents an IP address (or an IP network address) */
-PROXY_DECLARE(int) ap_proxy_is_ipaddr(struct dirconn_entry *This, apr_pool_t *p)
+PROXY_DECLARE(int) ap_proxy_is_ipaddr(struct exclude_entry *This, apr_pool_t *p)
 {
     const char *addr = This->name;
     long ip_addr[4];
@@ -674,7 +674,7 @@ PROXY_DECLARE(int) ap_proxy_is_ipaddr(struct dirconn_entry *This, apr_pool_t *p)
 }
 
 /* Return TRUE if addr represents an IP address (or an IP network address) */
-static int proxy_match_ipaddr(struct dirconn_entry *This, request_rec *r)
+static int proxy_match_ipaddr(struct exclude_entry *This, request_rec *r)
 {
     int i, ip_addr[4];
     struct in_addr addr, *ip;
@@ -759,7 +759,7 @@ static int proxy_match_ipaddr(struct dirconn_entry *This, request_rec *r)
 }
 
 /* Return TRUE if addr represents a domain name */
-PROXY_DECLARE(int) ap_proxy_is_domainname(struct dirconn_entry *This, apr_pool_t *p)
+PROXY_DECLARE(int) ap_proxy_is_domainname(struct exclude_entry *This, apr_pool_t *p)
 {
     char *addr = This->name;
     int i;
@@ -796,7 +796,7 @@ PROXY_DECLARE(int) ap_proxy_is_domainname(struct dirconn_entry *This, apr_pool_t
 }
 
 /* Return TRUE if host "host" is in domain "domain" */
-static int proxy_match_domainname(struct dirconn_entry *This, request_rec *r)
+static int proxy_match_domainname(struct exclude_entry *This, request_rec *r)
 {
     const char *host = proxy_get_host_of_request(r);
     int d_len = strlen(This->name), h_len;
@@ -820,7 +820,7 @@ static int proxy_match_domainname(struct dirconn_entry *This, request_rec *r)
 }
 
 /* Return TRUE if host represents a host name */
-PROXY_DECLARE(int) ap_proxy_is_hostname(struct dirconn_entry *This, apr_pool_t *p)
+PROXY_DECLARE(int) ap_proxy_is_hostname(struct exclude_entry *This, apr_pool_t *p)
 {
     struct apr_sockaddr_t *addr;
     char *host = This->name;
@@ -849,7 +849,7 @@ PROXY_DECLARE(int) ap_proxy_is_hostname(struct dirconn_entry *This, apr_pool_t *
 }
 
 /* Return TRUE if host "host" is equal to host2 "host2" */
-static int proxy_match_hostname(struct dirconn_entry *This, request_rec *r)
+static int proxy_match_hostname(struct exclude_entry *This, request_rec *r)
 {
     char *host = This->name;
     const char *host2 = proxy_get_host_of_request(r);
@@ -886,14 +886,14 @@ static int proxy_match_hostname(struct dirconn_entry *This, request_rec *r)
 }
 
 /* Return TRUE if addr is to be matched as a word */
-PROXY_DECLARE(int) ap_proxy_is_word(struct dirconn_entry *This, apr_pool_t *p)
+PROXY_DECLARE(int) ap_proxy_is_word(struct exclude_entry *This, apr_pool_t *p)
 {
     This->matcher = proxy_match_word;
     return 1;
 }
 
 /* Return TRUE if string "str2" occurs literally in "str1" */
-static int proxy_match_word(struct dirconn_entry *This, request_rec *r)
+static int proxy_match_word(struct exclude_entry *This, request_rec *r)
 {
     const char *host = proxy_get_host_of_request(r);
     return host != NULL && ap_strstr_c(host, This->name) != NULL;

@@ -820,7 +820,7 @@ static int proxy_handler(request_rec *r)
     proxy_balancer *balancer = NULL;
     proxy_worker *worker = NULL;
     int attempts = 0, max_attempts = 0;
-    struct dirconn_entry *list = (struct dirconn_entry *)conf->dirconn->elts;
+    struct exclude_entry *list = (struct exclude_entry *)conf->dirconn->elts;
 
     /* is this for us? */
     if (!r->proxyreq || !r->filename || strncmp(r->filename, "proxy:", 6) != 0)
@@ -1091,7 +1091,7 @@ static void * create_proxy_config(apr_pool_t *p, server_rec *s)
     ps->proxies = apr_array_make(p, 10, sizeof(struct proxy_remote));
     ps->aliases = apr_array_make(p, 10, sizeof(struct proxy_alias));
     ps->noproxies = apr_array_make(p, 10, sizeof(struct noproxy_entry));
-    ps->dirconn = apr_array_make(p, 10, sizeof(struct dirconn_entry));
+    ps->dirconn = apr_array_make(p, 10, sizeof(struct exclude_entry));
     ps->allowed_connect_ports = apr_array_make(p, 10, sizeof(int));
     ps->workers = apr_array_make(p, 10, sizeof(proxy_worker));
     ps->balancers = apr_array_make(p, 10, sizeof(proxy_balancer));
@@ -1536,8 +1536,8 @@ static const char *
     server_rec *s = parms->server;
     proxy_server_conf *conf =
     ap_get_module_config(s->module_config, &proxy_module);
-    struct dirconn_entry *New;
-    struct dirconn_entry *list = (struct dirconn_entry *) conf->dirconn->elts;
+    struct exclude_entry *New;
+    struct exclude_entry *list = (struct exclude_entry *) conf->dirconn->elts;
     int found = 0;
     int i;
 

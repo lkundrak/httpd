@@ -118,11 +118,11 @@ struct proxy_alias {
     unsigned int flags;
 };
 
-struct dirconn_entry {
+struct exclude_entry {
     char *name;
     struct in_addr addr, mask;
     struct apr_sockaddr_t *hostaddr;
-    int (*matcher) (struct dirconn_entry * This, request_rec *r);
+    int (*matcher) (struct exclude_entry * This, request_rec *r);
 };
 
 struct noproxy_entry {
@@ -497,10 +497,10 @@ PROXY_DECLARE(char *)ap_proxy_removestr(apr_pool_t *pool, const char *list, cons
 PROXY_DECLARE(int) ap_proxy_hex2sec(const char *x);
 PROXY_DECLARE(void) ap_proxy_sec2hex(int t, char *y);
 PROXY_DECLARE(int) ap_proxyerror(request_rec *r, int statuscode, const char *message);
-PROXY_DECLARE(int) ap_proxy_is_ipaddr(struct dirconn_entry *This, apr_pool_t *p);
-PROXY_DECLARE(int) ap_proxy_is_domainname(struct dirconn_entry *This, apr_pool_t *p);
-PROXY_DECLARE(int) ap_proxy_is_hostname(struct dirconn_entry *This, apr_pool_t *p);
-PROXY_DECLARE(int) ap_proxy_is_word(struct dirconn_entry *This, apr_pool_t *p);
+PROXY_DECLARE(int) ap_proxy_is_ipaddr(struct exclude_entry *This, apr_pool_t *p);
+PROXY_DECLARE(int) ap_proxy_is_domainname(struct exclude_entry *This, apr_pool_t *p);
+PROXY_DECLARE(int) ap_proxy_is_hostname(struct exclude_entry *This, apr_pool_t *p);
+PROXY_DECLARE(int) ap_proxy_is_word(struct exclude_entry *This, apr_pool_t *p);
 PROXY_DECLARE(int) ap_proxy_checkproxyblock(request_rec *r, proxy_server_conf *conf, apr_sockaddr_t *uri_addr);
 
 /** Test whether the hostname/address of the request are blocked by the ProxyBlock
