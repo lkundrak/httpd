@@ -1219,7 +1219,7 @@ static void * create_proxy_config(apr_pool_t *p, server_rec *s)
     ps->sec_proxy = apr_array_make(p, 10, sizeof(ap_conf_vector_t *));
     ps->proxies = apr_array_make(p, 10, sizeof(struct proxy_remote));
     ps->aliases = apr_array_make(p, 10, sizeof(struct proxy_alias));
-    ps->noproxies = apr_array_make(p, 10, sizeof(struct noproxy_entry));
+    ps->noproxies = apr_array_make(p, 10, sizeof(struct exclude_entry));
     ps->dirconn = apr_array_make(p, 10, sizeof(struct exclude_entry));
     ps->workers = apr_array_make(p, 10, sizeof(proxy_worker));
     ps->balancers = apr_array_make(p, 10, sizeof(proxy_balancer));
@@ -1800,31 +1800,8 @@ static const char *
     server_rec *s = parms->server;
     proxy_server_conf *conf =
     ap_get_module_config(s->module_config, &proxy_module);
-    struct noproxy_entry *new;
-    struct noproxy_entry *list = (struct noproxy_entry *) conf->noproxies->elts;
-    struct apr_sockaddr_t *addr;
-    int found = 0;
-    int i;
 
-    /* Don't duplicate entries */
-    for (i = 0; i < conf->noproxies->nelts; i++) {
-        if (strcasecmp(arg, list[i].name) == 0) { /* ignore case for host names */
-            found = 1;
-            break;
-        }
-    }
-
-    if (!found) {
-        new = apr_array_push(conf->noproxies);
-        new->name = arg;
-        if (APR_SUCCESS == apr_sockaddr_info_get(&addr, new->name, APR_UNSPEC, 0, 0, parms->pool)) {
-            new->addr = addr;
-        }
-        else {
-            new->addr = NULL;
-        }
-    }
-    return NULL;
+    return add_exclude_list(parms, arg, conf->noproxies);
 }
 
 

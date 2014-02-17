@@ -1526,8 +1526,8 @@ will rewrite a cookie with backend path <code>/</code> (or
 <usage>
     <p>The <directive>ProxyBlock</directive> directive can be used to
     block FTP or HTTP access to certain hosts via the proxy, based on
-    a full or partial hostname match, or, if applicable, an IP address
-    comparison.</p>
+    a host name or a domain name match, or, if applicable, an IP host or
+    network address comparison.</p>
 
     <p>Each of the arguments to the <directive>ProxyBlock</directive>
     directive can be either <code>*</code> or a alphanumeric string.
@@ -1539,11 +1539,11 @@ will rewrite a cookie with backend path <code>/</code> (or
     <module>mod_proxy</module> will deny access to all FTP or HTTP
     sites.</p>
 
-    <p>Otherwise, for any request for an HTTP or FTP resource via the
-    proxy, <module>mod_proxy</module> will check the hostname of the
-    request URI against each specified string.  If a partial string
-    match is found, access is denied.  If no matches against hostnames
-    are found, and a remote (forward) proxy is configured using
+    <p>Otherwise, the matching same as one used with
+    <directive>NoProxy</directive> is conducted to check the hostname of
+    the request URI against each specified string.  If a match is found,
+    access is denied.  If no matches against hostnames are found, and a
+    remote (forward) proxy is configured using
     <directive>ProxyRemote</directive> or
     <directive>ProxyRemoteMatch</directive>, access is allowed.  If no
     remote (forward) proxy is configured, the IP address of the
