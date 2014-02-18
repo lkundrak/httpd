@@ -699,6 +699,7 @@ static int proxy_match_domainname(struct exclude_entry *This, request_rec *r)
 PROXY_DECLARE(int) ap_proxy_is_hostname(struct exclude_entry *This, apr_pool_t *p)
 {
     struct apr_sockaddr_t *addr;
+    struct in_addr *ip;
     char *host = This->name;
     int i;
 
@@ -714,6 +715,9 @@ PROXY_DECLARE(int) ap_proxy_is_hostname(struct exclude_entry *This, apr_pool_t *
     }
 
     This->hostaddr = addr;
+    ip = (struct in_addr *) addr->ipaddr_ptr;
+    This->addr.s_addr = ip->s_addr;
+    This->mask.s_addr = htonl(APR_INADDR_NONE);
 
     /* Strip trailing dots */
     for (i = strlen(host) - 1; i > 0 && host[i] == '.'; --i) {
@@ -735,6 +739,10 @@ static int proxy_match_hostname(struct exclude_entry *This, request_rec *r)
     if (host == NULL || host2 == NULL) {
         return 0; /* oops! */
     }
+
+    /* Maybe the ip address matches. */
+    if (proxy_match_ipaddr(This, r))
+        return 1;
 
     h2_len = strlen(host2);
     h1_len = strlen(host);
