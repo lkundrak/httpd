@@ -274,6 +274,16 @@ struct proxy_conn_pool {
 #define PROXY_WORKER_IN_ERROR       0x0080
 #define PROXY_WORKER_HOT_STANDBY    0x0100
 
+/* worker status flags */
+#define PROXY_WORKER_INITIALIZED_FLAG    'O'
+#define PROXY_WORKER_IGNORE_ERRORS_FLAG  'I'
+#define PROXY_WORKER_IN_SHUTDOWN_FLAG    'U'
+#define PROXY_WORKER_DISABLED_FLAG       'D'
+#define PROXY_WORKER_STOPPED_FLAG        'S'
+#define PROXY_WORKER_IN_ERROR_FLAG       'E'
+#define PROXY_WORKER_HOT_STANDBY_FLAG    'H'
+#define PROXY_WORKER_FREE_FLAG           'F'
+
 #define PROXY_WORKER_NOT_USABLE_BITMAP ( PROXY_WORKER_IN_SHUTDOWN | \
 PROXY_WORKER_DISABLED | PROXY_WORKER_STOPPED | PROXY_WORKER_IN_ERROR )
 
@@ -386,6 +396,8 @@ struct proxy_balancer {
 #endif
     void            *context;   /* general purpose storage */
     int             scolonsep;  /* true if ';' seps sticky session paths */
+
+    apr_array_header_t *errstatuses; /* statuses to force members into error */
 };
 
 struct proxy_balancer_method {
@@ -490,6 +502,18 @@ PROXY_DECLARE(int) ap_proxy_is_domainname(struct dirconn_entry *This, apr_pool_t
 PROXY_DECLARE(int) ap_proxy_is_hostname(struct dirconn_entry *This, apr_pool_t *p);
 PROXY_DECLARE(int) ap_proxy_is_word(struct dirconn_entry *This, apr_pool_t *p);
 PROXY_DECLARE(int) ap_proxy_checkproxyblock(request_rec *r, proxy_server_conf *conf, apr_sockaddr_t *uri_addr);
+
+/** Test whether the hostname/address of the request are blocked by the ProxyBlock
+ * configuration.
+ * @param r         request
+ * @param conf      server configuration
+ * @param hostname  hostname from request URI
+ * @param addr      resolved address of hostname, or NULL if not known
+ * @return OK on success, or else an errro
+ */
+PROXY_DECLARE(int) ap_proxy_checkproxyblock2(request_rec *r, proxy_server_conf *conf, 
+                                             const char *hostname, apr_sockaddr_t *addr);
+
 PROXY_DECLARE(int) ap_proxy_pre_http_request(conn_rec *c, request_rec *r);
 PROXY_DECLARE(apr_status_t) ap_proxy_string_read(conn_rec *c, apr_bucket_brigade *bb, char *buff, size_t bufflen, int *eos);
 PROXY_DECLARE(void) ap_proxy_table_unmerge(apr_pool_t *p, apr_table_t *t, char *key);
@@ -773,6 +797,23 @@ PROXY_DECLARE(void) ap_proxy_backend_broke(request_rec *r,
 PROXY_DECLARE(apr_status_t)
 ap_proxy_buckets_lifetime_transform(request_rec *r, apr_bucket_brigade *from,
                                         apr_bucket_brigade *to);
+
+/**
+ * Set/unset the worker status bitfield depending on flag
+ * @param c    flag
+ * @param set  set or unset bit
+ * @param w    worker to use
+ * @return     APR_SUCCESS if valid flag
+ */
+PROXY_DECLARE(apr_status_t) ap_proxy_set_wstatus(char c, int set, proxy_worker *w);
+
+/**
+ * Create readable representation of worker status bitfield
+ * @param p  pool
+ * @param w  worker to use
+ * @return   string representation of status
+ */
+PROXY_DECLARE(char *) ap_proxy_parse_wstatus(apr_pool_t *p, proxy_worker *w);
 
 #define PROXY_LBMETHOD "proxylbmethod"
 

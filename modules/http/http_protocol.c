@@ -174,6 +174,9 @@ AP_DECLARE(int) ap_set_keepalive(request_rec *r)
      * body should use the HTTP/1.1 chunked transfer-coding.  In English,
      *
      *   IF  we have not marked this connection as errored;
+     *   and the client isn't expecting 100-continue (PR47087 - more
+     *       input here could be the client continuing when we're
+     *       closing the request).
      *   and the response body has a defined length due to the status code
      *       being 304 or 204, the request method being HEAD, already
      *       having defined Content-Length or Transfer-Encoding: chunked, or
@@ -195,6 +198,7 @@ AP_DECLARE(int) ap_set_keepalive(request_rec *r)
      * Note that the condition evaluation order is extremely important.
      */
     if ((r->connection->keepalive != AP_CONN_CLOSE)
+        && !r->expecting_100
         && ((r->status == HTTP_NOT_MODIFIED)
             || (r->status == HTTP_NO_CONTENT)
             || r->header_only
@@ -1231,16 +1235,28 @@ AP_DECLARE(void) ap_send_error_response(request_rec *r, int recursive_error)
         const char *h1;
 
         /* Accept a status_line set by a module, but only if it begins
-         * with the 3 digit status code
+         * with the correct 3 digit status code
          */
-        if (r->status_line != NULL
-            && strlen(r->status_line) > 4       /* long enough */
-            && apr_isdigit(r->status_line[0])
-            && apr_isdigit(r->status_line[1])
-            && apr_isdigit(r->status_line[2])
-            && apr_isspace(r->status_line[3])
-            && apr_isalnum(r->status_line[4])) {
-            title = r->status_line;
+        if (r->status_line) {
+            char *end;
+            int len = strlen(r->status_line);
+            if (len >= 3
+                && apr_strtoi64(r->status_line, &end, 10) == r->status
+                && (end - 3) == r->status_line
+                && (len < 4 || apr_isspace(r->status_line[3]))
+                && (len < 5 || apr_isalnum(r->status_line[4]))) {
+                /* Since we passed the above check, we know that length three
+                 * is equivalent to only a 3 digit numeric http status.
+                 * RFC2616 mandates a trailing space, let's add it.
+                 * If we have an empty reason phrase, we also add "Unknown Reason".
+                 */
+                if (len == 3) {
+                    r->status_line = apr_pstrcat(r->pool, r->status_line, " Unknown Reason", NULL);
+                } else if (len == 4) {
+                    r->status_line = apr_pstrcat(r->pool, r->status_line, "Unknown Reason", NULL);
+                }
+                title = r->status_line;
+            }
         }
 
         /* folks decided they didn't want the error code in the H1 text */

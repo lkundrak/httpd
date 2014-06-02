@@ -52,10 +52,15 @@ static void  ssl_var_lookup_ssl_cipher_bits(SSL *ssl, int *usekeysize, int *algk
 static char *ssl_var_lookup_ssl_version(apr_pool_t *p, char *var);
 static char *ssl_var_lookup_ssl_compress_meth(SSL *ssl);
 
+static APR_OPTIONAL_FN_TYPE(ssl_is_https) *othermod_is_https;
+static APR_OPTIONAL_FN_TYPE(ssl_var_lookup) *othermod_var_lookup;
+
 static int ssl_is_https(conn_rec *c)
 {
     SSLConnRec *sslconn = myConnConfig(c);
-    return sslconn && sslconn->ssl;
+    
+    return (sslconn && sslconn->ssl)
+        || (othermod_is_https && othermod_is_https(c));
 }
 
 static const char var_interface[] = "mod_ssl/" MOD_SSL_VERSION;
@@ -65,6 +70,9 @@ static char *var_library = NULL;
 void ssl_var_register(apr_pool_t *p)
 {
     char *cp, *cp2;
+
+    othermod_is_https = APR_RETRIEVE_OPTIONAL_FN(ssl_is_https);
+    othermod_var_lookup = APR_RETRIEVE_OPTIONAL_FN(ssl_var_lookup);
 
     APR_REGISTER_OPTIONAL_FN(ssl_is_https);
     APR_REGISTER_OPTIONAL_FN(ssl_var_lookup);
@@ -192,6 +200,15 @@ char *ssl_var_lookup(apr_pool_t *p, server_rec *s, conn_rec *c, request_rec *r, 
      */
     if (result == NULL && c != NULL) {
         SSLConnRec *sslconn = myConnConfig(c);
+
+        if (strlen(var) > 4 && strcEQn(var, "SSL_", 4)
+            && (!sslconn || !sslconn->ssl) && othermod_var_lookup) {
+            /* For an SSL_* variable, if mod_ssl is not enabled for
+             * this connection and another SSL module is present, pass
+             * through to that module. */
+            return othermod_var_lookup(p, s, c, r, var);
+        }
+
         if (strlen(var) > 4 && strcEQn(var, "SSL_", 4)
             && sslconn && sslconn->ssl)
             result = ssl_var_lookup_ssl(p, c, var+4);
@@ -432,6 +449,7 @@ static const struct {
     { "D",     NID_description,            1 },
 #ifdef NID_userId
     { "UID",   NID_x500UniqueIdentifier,   1 },
+    { "userID", NID_userId,                1 },
 #endif
     { "Email", NID_pkcs9_emailAddress,     1 },
     { NULL,    0,                          0 }
@@ -807,7 +825,8 @@ const char *ssl_ext_lookup(apr_pool_t *p, conn_rec *c, int peer,
         if (OBJ_cmp(ext->object, oid) == 0) {
             BIO *bio = BIO_new(BIO_s_mem());
 
-            if (X509V3_EXT_print(bio, ext, 0, 0) == 1) {
+            if (X509V3_EXT_print(bio, ext, 0, 0) == 1 ||
+                ASN1_STRING_print(bio, ext->value) == 1) {
                 BUF_MEM *buf;
 
                 BIO_get_mem_ptr(bio, &buf);

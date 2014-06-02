@@ -591,7 +591,6 @@ static int proxy_balancer_post_request(proxy_worker *worker,
                                        proxy_server_conf *conf)
 {
 
-#if 0
     apr_status_t rv;
 
     if ((rv = PROXY_THREAD_LOCK(balancer)) != APR_SUCCESS) {
@@ -600,8 +599,20 @@ static int proxy_balancer_post_request(proxy_worker *worker,
             balancer->name);
         return HTTP_INTERNAL_SERVER_ERROR;
     }
-    /* TODO: placeholder for post_request actions
-     */
+    if (!apr_is_empty_array(balancer->errstatuses)) {
+        int i;
+        for (i = 0; i < balancer->errstatuses->nelts; i++) {
+            int val = ((int *)balancer->errstatuses->elts)[i];
+            if (r->status == val) {
+                ap_log_error(APLOG_MARK, APLOG_ERR, rv, r->server,
+                             "proxy: BALANCER: (%s).  Forcing recovery for worker (%s), failonstatus %d",
+                             balancer->name, worker->name, val);
+                worker->s->status |= PROXY_WORKER_IN_ERROR;
+                worker->s->error_time = apr_time_now();
+                break;
+            }
+        }
+    }
 
     if ((rv = PROXY_THREAD_UNLOCK(balancer)) != APR_SUCCESS) {
         ap_log_error(APLOG_MARK, APLOG_ERR, rv, r->server,
@@ -610,8 +621,6 @@ static int proxy_balancer_post_request(proxy_worker *worker,
     }
     ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server,
                  "proxy_balancer_post_request for (%s)", balancer->name);
-
-#endif
 
     if (worker && worker->s->busy)
         worker->s->busy--;
@@ -664,6 +673,18 @@ static int balancer_init(apr_pool_t *p, apr_pool_t *plog,
     apr_uuid_format(balancer_nonce, &uuid);
 
     return OK;
+}
+
+static void create_radio(const char *name, unsigned int flag, proxy_worker *w,
+                         request_rec *r)
+{
+    ap_rvputs(r, "<td>Set <input name='", name, "' value='1' type=radio", NULL);
+    if (w->s->status & flag)
+        ap_rputs(" checked", r);
+    ap_rvputs(r, "> <br/> Clear <input name='", name, "' value='0' type=radio", NULL);
+    if (!(w->s->status & flag))
+        ap_rputs(" checked", r);
+    ap_rputs("></td>\n", r);
 }
 
 /* Manages the loadfactors and member status
@@ -761,11 +782,17 @@ static int balancer_handler(request_rec *r)
             else
                 *wsel->s->redirect = '\0';
         }
-        if ((val = apr_table_get(params, "dw"))) {
-            if (!strcasecmp(val, "Disable"))
-                wsel->s->status |= PROXY_WORKER_DISABLED;
-            else if (!strcasecmp(val, "Enable"))
-                wsel->s->status &= ~PROXY_WORKER_DISABLED;
+        if ((val = apr_table_get(params, "status_I"))) {
+            ap_proxy_set_wstatus('I', atoi(val), wsel);
+        }
+        if ((val = apr_table_get(params, "status_N"))) {
+            ap_proxy_set_wstatus('N', atoi(val), wsel);
+        }
+        if ((val = apr_table_get(params, "status_D"))) {
+            ap_proxy_set_wstatus('D', atoi(val), wsel);
+        }
+        if ((val = apr_table_get(params, "status_H"))) {
+            ap_proxy_set_wstatus('H', atoi(val), wsel);
         }
         if ((val = apr_table_get(params, "ls"))) {
             int ival = atoi(val);
@@ -775,10 +802,11 @@ static int balancer_handler(request_rec *r)
         }
 
     }
+
     if (apr_table_get(params, "xml")) {
         ap_set_content_type(r, "text/xml");
-        ap_rputs("<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n", r);
-        ap_rputs("<httpd:manager xmlns:httpd=\"http://httpd.apache.org\">\n", r);
+        ap_rputs("<?xml version='1.0' encoding='UTF-8' ?>\n", r);
+        ap_rputs("<httpd:manager xmlns:httpd='http://httpd.apache.org'>\n", r);
         ap_rputs("  <httpd:balancers>\n", r);
         balancer = (proxy_balancer *)conf->balancers->elts;
         for (i = 0; i < conf->balancers->nelts; i++) {
@@ -809,7 +837,8 @@ static int balancer_handler(request_rec *r)
         ap_rputs(DOCTYPE_HTML_3_2
                  "<html><head><title>Balancer Manager</title></head>\n", r);
         ap_rputs("<body><h1>Load Balancer Manager for ", r);
-        ap_rvputs(r, ap_get_server_name(r), "</h1>\n\n", NULL);
+        ap_rvputs(r, ap_escape_html(r->pool, ap_get_server_name(r)),
+                  "</h1>\n\n", NULL);
         ap_rvputs(r, "<dl><dt>Server Version: ",
                   ap_get_server_description(), "</dt>\n", NULL);
         ap_rvputs(r, "<dt>Server Built: ",
@@ -844,7 +873,8 @@ static int balancer_handler(request_rec *r)
             worker = (proxy_worker *)balancer->workers->elts;
             for (n = 0; n < balancer->workers->nelts; n++) {
                 char fbuf[50];
-                ap_rvputs(r, "<tr>\n<td><a href=\"", r->uri, "?b=",
+                ap_rvputs(r, "<tr>\n<td><a href=\"",
+                          ap_escape_uri(r->pool, r->uri), "?b=",
                           balancer->name + sizeof("balancer://") - 1, "&w=",
                           ap_escape_uri(r->pool, worker->name),
                           "&nonce=", balancer_nonce, 
@@ -856,18 +886,7 @@ static int balancer_handler(request_rec *r)
                           ap_escape_html(r->pool, worker->s->redirect), NULL);
                 ap_rprintf(r, "</td><td>%d</td>", worker->s->lbfactor);
                 ap_rprintf(r, "<td>%d</td><td>", worker->s->lbset);
-                if (worker->s->status & PROXY_WORKER_DISABLED)
-                   ap_rputs("Dis ", r);
-                if (worker->s->status & PROXY_WORKER_IN_ERROR)
-                   ap_rputs("Err ", r);
-                if (worker->s->status & PROXY_WORKER_STOPPED)
-                   ap_rputs("Stop ", r);
-                if (worker->s->status & PROXY_WORKER_HOT_STANDBY)
-                   ap_rputs("Stby ", r);
-                if (PROXY_WORKER_IS_USABLE(worker))
-                    ap_rputs("Ok", r);
-                if (!PROXY_WORKER_IS_INITIALIZED(worker))
-                    ap_rputs("-", r);
+                ap_rvputs(r, ap_proxy_parse_wstatus(r->pool, worker), NULL);
                 ap_rputs("</td>", r);
                 ap_rprintf(r, "<td>%" APR_SIZE_T_FMT "</td><td>", worker->s->elected);
                 ap_rputs(apr_strfsize(worker->s->transferred, fbuf), r);
@@ -885,7 +904,7 @@ static int balancer_handler(request_rec *r)
             ap_rputs("<h3>Edit worker settings for ", r);
             ap_rvputs(r, wsel->name, "</h3>\n", NULL);
             ap_rvputs(r, "<form method=\"GET\" action=\"", NULL);
-            ap_rvputs(r, r->uri, "\">\n<dl>", NULL);
+            ap_rvputs(r, ap_escape_uri(r->pool, r->uri), "\">\n<dl>", NULL);
             ap_rputs("<table><tr><td>Load factor:</td><td><input name=\"lf\" type=text ", r);
             ap_rprintf(r, "value=\"%d\"></td></tr>\n", wsel->s->lbfactor);
             ap_rputs("<tr><td>LB Set:</td><td><input name=\"ls\" type=text ", r);
@@ -898,21 +917,20 @@ static int balancer_handler(request_rec *r)
             ap_rvputs(r, "value=\"", ap_escape_html(r->pool, wsel->s->redirect),
                       NULL);
             ap_rputs("\"></td></tr>\n", r);
-            ap_rputs("<tr><td>Status:</td><td>Disabled: <input name=\"dw\" value=\"Disable\" type=radio", r);
-            if (wsel->s->status & PROXY_WORKER_DISABLED)
-                ap_rputs(" checked", r);
-            ap_rputs("> | Enabled: <input name=\"dw\" value=\"Enable\" type=radio", r);
-            if (!(wsel->s->status & PROXY_WORKER_DISABLED))
-                ap_rputs(" checked", r);
-            ap_rputs("></td></tr>\n", r);
-            ap_rputs("<tr><td colspan=2><input type=submit value=\"Submit\"></td></tr>\n", r);
-            ap_rvputs(r, "</table>\n<input type=hidden name=\"w\" ",  NULL);
-            ap_rvputs(r, "value=\"", ap_escape_uri(r->pool, wsel->name), "\">\n", NULL);
-            ap_rvputs(r, "<input type=hidden name=\"b\" ", NULL);
-            ap_rvputs(r, "value=\"", bsel->name + sizeof("balancer://") - 1,
-                      "\">\n", NULL);
-            ap_rvputs(r, "<input type=hidden name=\"nonce\" value=\"", 
-                      balancer_nonce, "\">\n", NULL);
+            ap_rputs("<tr><td>Status:</td>", r);
+            ap_rputs("<td><table border='1'><tr><th>Ign</th><th>Dis</th><th>Stby</th></tr>\n<tr>", r);
+            create_radio("status_I", PROXY_WORKER_IGNORE_ERRORS, wsel, r);
+            create_radio("status_D", PROXY_WORKER_DISABLED, wsel, r);
+            create_radio("status_H", PROXY_WORKER_HOT_STANDBY, wsel, r);
+            ap_rputs("</tr></table>\n", r);
+            ap_rputs("<tr><td colspan=2><input type=submit value='Submit'></td></tr>\n", r);
+            ap_rvputs(r, "</table>\n<input type=hidden name='w' ",  NULL);
+            ap_rvputs(r, "value='", ap_escape_uri(r->pool, wsel->name), "'>\n", NULL);
+            ap_rvputs(r, "<input type=hidden name='b' ", NULL);
+            ap_rvputs(r, "value='", bsel->name + sizeof("balancer://") - 1,
+                      "'>\n", NULL);
+            ap_rvputs(r, "<input type=hidden name='nonce' value='",
+                      balancer_nonce, "'>\n", NULL);
             ap_rvputs(r, "</form>\n", NULL);
             ap_rputs("<hr />\n", r);
         }

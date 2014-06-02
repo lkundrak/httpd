@@ -170,6 +170,9 @@ typedef struct {
     int lockpath_set;
     apr_time_t lockmaxage;
     int lockmaxage_set;
+    /* treat maxex as hard limit */
+    int hardmaxex;
+    int hardmaxex_set;
 } cache_server_conf;
 
 /* cache info information */

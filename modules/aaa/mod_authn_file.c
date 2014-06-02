@@ -70,6 +70,10 @@ static authn_status check_password(request_rec *r, const char *user,
     apr_status_t status;
     char *file_password = NULL;
 
+    if (!conf->pwfile) {
+        return AUTH_GENERAL_ERROR;
+    }
+
     status = ap_pcfg_openfile(&f, r->pool, conf->pwfile);
 
     if (status != APR_SUCCESS) {

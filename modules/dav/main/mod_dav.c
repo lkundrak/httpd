@@ -719,6 +719,12 @@ static dav_error *dav_get_resource(request_rec *r, int label_allowed,
 
     conf = ap_get_module_config(r->per_dir_config, &dav_module);
     /* assert: conf->provider != NULL */
+    if (conf->provider == NULL) {
+        return dav_new_error(r->pool, HTTP_METHOD_NOT_ALLOWED, 0,
+                             apr_psprintf(r->pool,
+				          "DAV not enabled for %s",
+					  ap_escape_html(r->pool, r->uri)));
+    }
 
     /* resolve the resource */
     err = (*conf->provider->repos->get_resource)(r, conf->dir,
@@ -975,6 +981,7 @@ static int dav_method_put(request_rec *r)
         apr_bucket_brigade *bb;
         apr_bucket *b;
         int seen_eos = 0;
+        int commit;
 
         bb = apr_brigade_create(r->pool, r->connection->bucket_alloc);
 
@@ -1025,8 +1032,12 @@ static int dav_method_put(request_rec *r)
 
         apr_brigade_destroy(bb);
 
-        err2 = (*resource->hooks->close_stream)(stream,
-                                                err == NULL /* commit */);
+        /* Commit if either the resource already exists, or there was
+         * no error during reading/writing the body. */
+        commit = (resource_state == DAV_RESOURCE_EXISTS) || (err == NULL);
+
+        err2 = (*resource->hooks->close_stream)(stream, commit);
+
         if (err2 != NULL && err == NULL) {
             /* no error during the write, but we hit one at close. use it. */
             err = err2;
@@ -2636,11 +2647,6 @@ static int dav_method_copymove(request_rec *r, int is_move)
         /* ### how best to report this... */
         return dav_error_response(r, lookup.rnew->status,
                                   "Destination URI had an error.");
-    }
-
-    if (dav_get_provider(lookup.rnew) == NULL) {
-        return dav_error_response(r, HTTP_METHOD_NOT_ALLOWED,
-                                  "DAV not enabled for Destination URI.");
     }
 
     /* Resolve destination resource */

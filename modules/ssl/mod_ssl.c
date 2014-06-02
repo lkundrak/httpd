@@ -314,6 +314,9 @@ static SSLConnRec *ssl_init_connection_ctx(conn_rec *c)
     return sslconn;
 }
 
+static typeof(ssl_proxy_enable) *othermod_proxy_enable;
+static typeof(ssl_engine_disable) *othermod_engine_disable;
+
 int ssl_proxy_enable(conn_rec *c)
 {
     SSLSrvConfigRec *sc;
@@ -322,6 +325,12 @@ int ssl_proxy_enable(conn_rec *c)
     sc = mySrvConfig(sslconn->server);
 
     if (!sc->proxy_enabled) {
+        if (othermod_proxy_enable) {
+            ap_log_cerror(APLOG_MARK, APLOG_DEBUG, 0, c,
+                          "mod_ssl proxy not configured, passing through to other module.");
+            return othermod_proxy_enable(c);
+        }
+
         ap_log_cerror(APLOG_MARK, APLOG_ERR, 0, c,
                       "SSL Proxy requested for %s but not enabled "
                       "[Hint: SSLProxyEngine]", sc->vhost_id);
@@ -340,6 +349,10 @@ int ssl_engine_disable(conn_rec *c)
     SSLSrvConfigRec *sc;
 
     SSLConnRec *sslconn = myConnConfig(c);
+
+    if (othermod_engine_disable) {
+        othermod_engine_disable(c);
+    }
 
     if (sslconn) {
         sc = mySrvConfig(sslconn->server);
@@ -532,6 +545,9 @@ static void ssl_register_hooks(apr_pool_t *p)
 /*    ap_hook_handler       (ssl_hook_Upgrade,       NULL,NULL, APR_HOOK_MIDDLE); */
 
     ssl_var_register(p);
+    
+    othermod_proxy_enable = APR_RETRIEVE_OPTIONAL_FN(ssl_proxy_enable);
+    othermod_engine_disable = APR_RETRIEVE_OPTIONAL_FN(ssl_engine_disable);
 
     APR_REGISTER_OPTIONAL_FN(ssl_proxy_enable);
     APR_REGISTER_OPTIONAL_FN(ssl_engine_disable);

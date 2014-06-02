@@ -260,6 +260,9 @@ static int uldap_connection_init(request_rec *r,
     /* always default to LDAP V3 */
     ldap_set_option(ldc->ldap, LDAP_OPT_PROTOCOL_VERSION, &version);
 
+    /* referrals */
+    ldap_set_option(ldc->ldap, LDAP_OPT_REFERRALS, st->chase_referrals ? LDAP_OPT_ON : LDAP_OPT_OFF);
+
     /* set client certificates */
     if (!apr_is_empty_array(ldc->client_certs)) {
         apr_ldap_set_option(r->pool, ldc->ldap, APR_LDAP_OPT_TLS_CERT,
@@ -1321,6 +1324,78 @@ start_over:
     return LDAP_SUCCESS;
 }
 
+static int uldap_cache_getattrvals(request_rec *r, 
+                                   util_ldap_connection_t *ldc,
+                                   const char *url, const char *dn,
+                                   const char *attrib,
+                                   const char ***values)
+{
+    int failures = 0, result, n, count;
+    LDAPMessage *res, *entry;
+    char **attrs, **vals;
+
+    attrs = apr_pcalloc(r->pool, 2 * sizeof *attrs);
+    attrs[0] = (char *)attrib;
+
+start_over:
+    if (failures++ > 10) {
+        /* too many failures */
+        return result;
+    }
+
+    result = uldap_connection_open(r, ldc);
+    if (result != LDAP_SUCCESS) {
+        return result;
+    }
+
+    result = ldap_search_ext_s(ldc->ldap, dn, LDAP_SCOPE_BASE,
+                               "(objectclass=*)", attrs, 0,
+                               NULL, NULL, NULL, -1, &res);
+    if (result == LDAP_SERVER_DOWN)
+    {
+        ldc->reason = "DN Comparison ldap_search_ext_s() "
+                      "failed with server down";
+        uldap_connection_unbind(ldc);
+        goto start_over;
+    }
+
+    if (result != LDAP_SUCCESS) {
+        ldc->reason = "DN attribute fetch ldap_search_ext_s() failed";
+        return result;
+    }
+    
+    /* Require exactly one entry to be returned. */
+    count = ldap_count_entries(ldc->ldap, res);
+    if (count != 1) {
+        ldc->reason = apr_psprintf(r->pool, "found %d entries, expected "
+                                   "exactly one match", count);
+        ldap_msgfree(res);
+        return LDAP_NO_SUCH_OBJECT;
+    }
+
+    entry = ldap_first_entry(ldc->ldap, res);
+
+    vals = ldap_get_values(ldc->ldap, entry, attrib);
+    if (!vals) {
+        ldap_memfree(res);
+        ldc->reason = "ldap_get_values() failed";
+        return LDAP_NO_SUCH_OBJECT;
+    }
+    
+    count = ldap_count_values(vals);
+    *values = apr_palloc(r->pool, (count + 1) * sizeof **values);
+
+    for (n = 0; n < count; n++) {
+        (*values)[n] = apr_pstrdup(r->pool, vals[n]);
+    }
+    values[n] = NULL;
+
+    ldap_value_free(vals);
+    ldap_memfree(res);
+
+    return LDAP_SUCCESS;
+}
+
 /*
  * Reports if ssl support is enabled
  *
@@ -1776,6 +1851,29 @@ static const char *util_ldap_set_verify_srv_cert(cmd_parms *cmd,
 }
 
 
+static const char *util_ldap_set_chase_referrals(cmd_parms *cmd,
+						 void *dummy,
+						 int mode)
+{
+    util_ldap_state_t *st =
+    (util_ldap_state_t *)ap_get_module_config(cmd->server->module_config,
+					      &ldap_module);
+    const char *err = ap_check_cmd_context(cmd, GLOBAL_ONLY);
+
+    if (err != NULL) {
+	return err;
+    }
+
+    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, cmd->server,
+		      "LDAP: chase referrals - %s",
+		      mode?"TRUE":"FALSE");
+
+    st->chase_referrals = mode;
+
+    return(NULL);
+}
+
+
 static const char *util_ldap_set_connection_timeout(cmd_parms *cmd,
                                                     void *dummy,
                                                     const char *ttl)
@@ -1833,10 +1931,14 @@ static void *util_ldap_create_config(apr_pool_t *p, server_rec *s)
     st->secure_set = 0;
     st->connectionTimeout = 10;
     st->verify_svr_cert = 1;
+    st->chase_referrals = 1;
 
     return st;
 }
 
+/* cache-related settings are not merged here, but in the post_config hook,
+ * since the cache has not yet sprung to life
+ */
 static void *util_ldap_merge_config(apr_pool_t *p, void *basev,
                                     void *overridesv)
 {
@@ -1983,6 +2085,7 @@ static int util_ldap_post_config(apr_pool_t *p, apr_pool_t *plog,
             st_vhost->cache_shm = st->cache_shm;
             st_vhost->cache_rmm = st->cache_rmm;
             st_vhost->cache_file = st->cache_file;
+            st_vhost->util_ldap_cache = st->util_ldap_cache;
             ap_log_error(APLOG_MARK, APLOG_DEBUG, result, s,
                          "LDAP merging Shared Cache conf: shm=0x%pp rmm=0x%pp "
                          "for VHOST: %s", st->cache_shm, st->cache_rmm,
@@ -2130,7 +2233,12 @@ static const command_rec util_ldap_cmds[] = {
                   NULL, RSRC_CONF,
                   "Specify the LDAP socket connection timeout in seconds "
                   "(default: 10)"),
-
+    AP_INIT_FLAG("LDAPChaseReferrals", util_ldap_set_chase_referrals,
+		  NULL, RSRC_CONF,
+		  "Set to 'ON' requires that LDAP referrals are searched.  Default 'ON'"),
+    AP_INIT_FLAG("LDAPReferrals", util_ldap_set_chase_referrals,
+		  NULL, RSRC_CONF,
+		  "Set to 'ON' requires that LDAP referrals are searched.  Default 'ON'"),
     {NULL}
 };
 
@@ -2143,6 +2251,7 @@ static void util_ldap_register_hooks(apr_pool_t *p)
     APR_REGISTER_OPTIONAL_FN(uldap_connection_find);
     APR_REGISTER_OPTIONAL_FN(uldap_cache_comparedn);
     APR_REGISTER_OPTIONAL_FN(uldap_cache_compare);
+    APR_REGISTER_OPTIONAL_FN(uldap_cache_getattrvals);
     APR_REGISTER_OPTIONAL_FN(uldap_cache_checkuserid);
     APR_REGISTER_OPTIONAL_FN(uldap_cache_getuserdn);
     APR_REGISTER_OPTIONAL_FN(uldap_ssl_supported);

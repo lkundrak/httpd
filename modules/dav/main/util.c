@@ -372,8 +372,10 @@ DAV_DECLARE(const char *) dav_xml_get_cdata(const apr_xml_elem *elem, apr_pool_t
 
     if (strip_white) {
         /* trim leading whitespace */
-        while (apr_isspace(*cdata))     /* assume: return false for '\0' */
+        while (apr_isspace(*cdata)) {     /* assume: return false for '\0' */
             ++cdata;
+            --len;
+        }
 
         /* trim trailing whitespace */
         while (len-- > 0 && apr_isspace(cdata[len]))
@@ -624,7 +626,8 @@ static dav_error * dav_process_if_header(request_rec *r, dav_if_header **p_ih)
 
             /* 2518 specifies this must be an absolute URI; just take the
              * relative part for later comparison against r->uri */
-            if (apr_uri_parse(r->pool, uri, &parsed_uri) != APR_SUCCESS) {
+            if (apr_uri_parse(r->pool, uri, &parsed_uri) != APR_SUCCESS
+                || !parsed_uri.path) {
                 return dav_new_error(r->pool, HTTP_BAD_REQUEST,
                                      DAV_ERR_IF_TAGGED,
                                      "Invalid URI in tagged If-header.");

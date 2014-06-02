@@ -632,6 +632,13 @@ AP_DECLARE(apr_status_t) unixd_accept(void **accepted, ap_listen_rec *lr,
                          "select/accept error (%d)", status);
             return APR_EGENERAL;
 #else
+        case EBADF:
+            if (!lr->active) {
+                /* If the listening socket has been closed, don't log an
+                 * error, this is a graceful restart. */
+                return status;
+            }
+            /* else, fallthrough. */
         default:
             ap_log_error(APLOG_MARK, APLOG_ERR, status, ap_server_conf,
                          "apr_socket_accept: (client socket)");

@@ -30,7 +30,7 @@
 #include "apr_time.h"
 #include "apr_ldap.h"
 
-#if APR_HAS_MICROSOFT_LDAPSDK
+#ifdef LDAP_UNAVAILABLE
 #define AP_LDAP_IS_SERVER_DOWN(s)                ((s) == LDAP_SERVER_DOWN \
                 ||(s) == LDAP_UNAVAILABLE)
 #else
@@ -148,6 +148,7 @@ typedef struct util_ldap_state_t {
     char *lock_file;           /* filename for shm lock mutex */
     long  connectionTimeout;
     int   verify_svr_cert;
+    int   chase_referrals;
 
 } util_ldap_state_t;
 
@@ -302,6 +303,29 @@ APR_DECLARE_OPTIONAL_FN(int,uldap_cache_checkuserid,(request_rec *r, util_ldap_c
 APR_DECLARE_OPTIONAL_FN(int,uldap_cache_getuserdn,(request_rec *r, util_ldap_connection_t *ldc,
                               const char *url, const char *basedn, int scope, char **attrs,
                               const char *filter, const char **binddn, const char ***retvals));
+
+
+/**
+ * Searches for a specified user object in an LDAP directory
+ * @param r The request record
+ * @param ldc The LDAP connection being used.
+ * @param url The URL of the LDAP connection - used for deciding which cache to use.
+ * @param basedn The Base DN to search for the user in.
+ * @param scope LDAP scope of the search.
+ * @param attrs LDAP attributes to return in search.
+ * @param filter The user to search for in the form of an LDAP filter. This filter must return
+ *               exactly one user for the check to be successful.
+ * @param binddn The DN of the user will be returned in this variable.
+ * @param retvals The values corresponding to the attributes requested in the attrs array.
+ * @tip The filter supplied will be searched for. If a single entry is returned, an attempt
+ *      is made to bind as that user. If this bind succeeds, the user is not validated.
+ * @deffunc int util_ldap_cache_getuserdn(request_rec *r, util_ldap_connection_t *ldc,
+ *                                          char *url, const char *basedn, int scope, char **attrs,
+ *                                          char *filter, char **binddn, char ***retvals)
+ */
+APR_DECLARE_OPTIONAL_FN(int,uldap_cache_getattrvals,(request_rec *r, util_ldap_connection_t *ldc,
+                                                     const char *url, const char *dn, 
+                                                     const char *attrib, const char ***values));
 
 /**
  * Checks if SSL support is available in mod_ldap

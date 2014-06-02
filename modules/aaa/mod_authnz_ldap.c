@@ -75,6 +75,8 @@ typedef struct {
     int group_attrib_is_dn;         /* If true, the group attribute is the DN, otherwise,
                                         it's the exact string passed by the HTTP client */
 
+    int dynamic_groups;             /* If true, dynamic group lookups are enabled. */
+
     int secure;                     /* True if SSL connections are requested */
 } authn_ldap_config_t;
 
@@ -96,6 +98,7 @@ static APR_OPTIONAL_FN_TYPE(uldap_connection_close) *util_ldap_connection_close;
 static APR_OPTIONAL_FN_TYPE(uldap_connection_find) *util_ldap_connection_find;
 static APR_OPTIONAL_FN_TYPE(uldap_cache_comparedn) *util_ldap_cache_comparedn;
 static APR_OPTIONAL_FN_TYPE(uldap_cache_compare) *util_ldap_cache_compare;
+static APR_OPTIONAL_FN_TYPE(uldap_cache_getattrvals) *util_ldap_cache_getattrvals;
 static APR_OPTIONAL_FN_TYPE(uldap_cache_checkuserid) *util_ldap_cache_checkuserid;
 static APR_OPTIONAL_FN_TYPE(uldap_cache_getuserdn) *util_ldap_cache_getuserdn;
 static APR_OPTIONAL_FN_TYPE(uldap_ssl_supported) *util_ldap_ssl_supported;
@@ -103,6 +106,11 @@ static APR_OPTIONAL_FN_TYPE(uldap_ssl_supported) *util_ldap_ssl_supported;
 static apr_hash_t *charset_conversions = NULL;
 static char *to_charset = NULL;           /* UTF-8 identifier derived from the charset.conv file */
 
+/* Evaluates to a string description of a scope integer. */
+#define SCOPE_TO_STR(scope_)                                    \
+    (scope_ == LDAP_SCOPE_SUBTREE? "subtree" :                  \
+     scope_ == LDAP_SCOPE_BASE? "base" :                        \
+     scope_ == LDAP_SCOPE_ONELEVEL? "onelevel" : "unknown")
 
 /* Derive a code page ID give a language name or ID */
 static char* derive_codepage_from_lang (apr_pool_t *p, char *language)
@@ -174,10 +182,11 @@ static apr_xlate_t* get_conv_set (request_rec *r)
  */
 #define FILTER_LENGTH MAX_STRING_LEN
 static void authn_ldap_build_filter(char *filtbuf,
-                             request_rec *r,
-                             const char* sent_user,
-                             const char* sent_filter,
-                             authn_ldap_config_t *sec)
+                                    request_rec *r,
+                                    const char* sent_user,
+                                    const char* sent_filter,
+                                    authn_ldap_config_t *sec,
+                                    int add_parens)
 {
     char *p, *q, *filtbuf_end;
     char *user, *filter;
@@ -217,7 +226,12 @@ static void authn_ldap_build_filter(char *filtbuf,
      * Create the first part of the filter, which consists of the
      * config-supplied portions.
      */
-    apr_snprintf(filtbuf, FILTER_LENGTH, "(&(%s)(%s=", filter, sec->attribute);
+    if (add_parens) {
+        apr_snprintf(filtbuf, FILTER_LENGTH, "(&(%s)(%s=", filter, sec->attribute);
+    }
+    else {
+        apr_snprintf(filtbuf, FILTER_LENGTH, "(&%s(%s=", filter, sec->attribute);
+    }
 
     /*
      * Now add the client-supplied username to the filter, ensuring that any
@@ -320,6 +334,45 @@ static apr_status_t authnz_ldap_cleanup_connection_close(void *param)
     return APR_SUCCESS;
 }
 
+#ifndef AUTHZ_PREFIX
+# define AUTHZ_PREFIX "AUTHORIZE_"
+#endif
+static int set_request_vars(request_rec *r, authn_ldap_config_t *sec, const char **vals,
+			    int is_authn)
+{
+    char *prefix = NULL;
+    int prefix_len;
+    int remote_user_attribute_set = 0;
+
+    prefix = (is_authn) ? AUTHN_PREFIX : AUTHZ_PREFIX;
+    prefix_len = strlen(prefix);
+
+    /* add environment variables */
+    if (sec->attributes && vals) {
+        apr_table_t *e = r->subprocess_env;
+        int i = 0;
+        while (sec->attributes[i]) {
+            char *str = apr_pstrcat(r->pool, prefix, sec->attributes[i], NULL);
+            int j = prefix_len;
+            while (str[j]) {
+                str[j] = apr_toupper(str[j]);
+                j++;
+            }
+            apr_table_setn(e, str, vals[i]);
+
+            /* handle remote_user_attribute, if set */
+            if (is_authn && sec->remote_user_attribute && 
+                !strcmp(sec->remote_user_attribute, sec->attributes[i])) {
+                r->user = (char *)apr_pstrdup(r->pool, vals[i]);
+                remote_user_attribute_set = 1;
+            }
+            i++;
+        }
+    }
+
+    return remote_user_attribute_set;
+}
+
 
 /*
  * Authentication Phase
@@ -395,7 +448,7 @@ start_over:
     }
 
     /* build the username filter */
-    authn_ldap_build_filter(filtbuf, r, user, NULL, sec);
+    authn_ldap_build_filter(filtbuf, r, user, NULL, sec, 1);
 
     /* do the user search */
     result = util_ldap_cache_checkuserid(r, ldc, sec->url, sec->basedn, sec->scope,
@@ -447,28 +500,7 @@ start_over:
         r->user = req->dn;
     }
 
-    /* add environment variables */
-    if (sec->attributes && vals) {
-        apr_table_t *e = r->subprocess_env;
-        int i = 0;
-        while (sec->attributes[i]) {
-            char *str = apr_pstrcat(r->pool, AUTHN_PREFIX, sec->attributes[i], NULL);
-            int j = sizeof(AUTHN_PREFIX)-1; /* string length of "AUTHENTICATE_", excluding the trailing NIL */
-            while (str[j]) {
-                str[j] = apr_toupper(str[j]);
-                j++;
-            }
-            apr_table_setn(e, str, vals[i]);
-
-            /* handle remote_user_attribute, if set */
-            if (sec->remote_user_attribute && 
-                !strcmp(sec->remote_user_attribute, sec->attributes[i])) {
-                r->user = (char *)apr_pstrdup(r->pool, vals[i]);
-                remote_user_attribute_set = 1;
-            }
-            i++;
-        }
-    }
+    remote_user_attribute_set = set_request_vars(r, sec, vals, 1);
 
     /* sanity check */
     if (sec->remote_user_attribute && !remote_user_attribute_set) {
@@ -485,6 +517,92 @@ start_over:
                   "[%" APR_PID_T_FMT "] auth_ldap authenticate: accepting %s", getpid(), user);
 
     return AUTH_GRANTED;
+}
+
+/* Check whether user is a member of dynamic group groupDN.  Returns
+ * LDAP_COMPARE_TRUE on success or LDAP_COMPARE_FALSE otherwise.  */
+static int check_dynamic_groups(request_rec *r, util_ldap_connection_t *ldc,
+                                authn_ldap_config_t *sec, authn_ldap_request_t *req,
+                                const char *attrib, const char *groupDN)
+{
+    apr_ldap_url_desc_t *gurl;
+    apr_ldap_err_t *err;
+    const char **vals;
+    int result, n;
+
+    /* Retrieve the set of memberURL attribute values from the group
+     * DN which specify the search URLs which define the group. */
+    result = util_ldap_cache_getattrvals(r, ldc, sec->url, groupDN, attrib, &vals);
+    if (result != LDAP_SUCCESS) {
+        return LDAP_COMPARE_FALSE;
+    }
+
+    /* Iterate through the returned search URLs attempting to match
+     * the user's DN against the results of each search.  */
+    for (n = 0, result = LDAP_COMPARE_FALSE; 
+         vals[n] && result != LDAP_COMPARE_TRUE; 
+         n++) {
+        char filter[FILTER_LENGTH];
+        const char *dn;
+        int need_parens;
+
+        /* Parse the URL. */
+        result = apr_ldap_url_parse(r->pool, vals[n], &gurl, &err);
+        if (result) {
+            ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
+                          "auth_ldap authorise: could not parse URL %s for dynamic group",
+                          vals[n]);
+            result = LDAP_COMPARE_FALSE;
+            ldc->reason = "could not parse URL";
+            continue;
+        }
+        
+        /* The host and attribute fields will be ignored so warn if
+         * they are specified. */
+        if (gurl->lud_host || gurl->lud_attrs) {
+            ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
+                          "auth_ldap authorise: attrib/host are ignored in dynamic group URL %s",
+                          vals[n]);
+        }
+
+        /* Build the search filter; a boolean AND of the group's
+         * search filter and a search filter for the user.  A valid
+         * LDAP filter string (per RFC 4515 'filter' grammar, section
+         * 3) must be enclosed in parentheses.  Unfortunately, it is
+         * common for existing databases (and doc examples) to contain
+         * invalid memberURL specifications which don't include the
+         * parentheses in the filter part of the URL. */
+        need_parens = !gurl->lud_filter || gurl->lud_filter[0] != '(';
+        authn_ldap_build_filter(filter, r, req->user, gurl->lud_filter, sec,
+                                need_parens);
+
+        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                      "auth_ldap authorise: checking dynamic group ldap:///%s?%s?%s",
+                      gurl->lud_dn, SCOPE_TO_STR(gurl->lud_scope), filter);
+
+        /* Search for the user DN. */
+        result = util_ldap_cache_getuserdn(r, ldc, sec->url, 
+                                           gurl->lud_dn, gurl->lud_scope, NULL, 
+                                           filter, &dn, &vals);
+        if (result == LDAP_SUCCESS) {
+            ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                          "[%" APR_PID_T_FMT "] auth_ldap authorise: checking "
+                          "DN %s match for dynamic group",
+                          getpid(), dn);
+            result = util_ldap_cache_comparedn(r, ldc, sec->url, req->dn, dn,
+                                               sec->compare_dn_on_server);
+        }
+        
+        if (result != LDAP_COMPARE_TRUE) {
+            ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                          "[%" APR_PID_T_FMT "] auth_ldap authorise: failed to find user DN "
+                          "in dynamic group %s",
+                          getpid(), vals[n]);
+            result = LDAP_COMPARE_FALSE;
+        }
+    }
+
+    return result;
 }
 
 /*
@@ -610,7 +728,7 @@ static int authz_ldap_check_user_access(request_rec *r)
             "ldap authorize: Creating LDAP req structure");
 
         /* Build the username filter */
-        authn_ldap_build_filter(filtbuf, r, r->user, NULL, sec);
+        authn_ldap_build_filter(filtbuf, r, r->user, NULL, sec, 1);
 
         /* Search for the user DN */
         result = util_ldap_cache_getuserdn(r, ldc, sec->url, sec->basedn,
@@ -659,6 +777,7 @@ static int authz_ldap_check_user_access(request_rec *r)
                     ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
                                   "[%" APR_PID_T_FMT "] auth_ldap authorise: "
                                   "require user: authorisation successful", getpid());
+                    set_request_vars(r, sec, vals, 0);
                     return OK;
                 }
                 default: {
@@ -679,6 +798,7 @@ static int authz_ldap_check_user_access(request_rec *r)
                         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
                                       "[%" APR_PID_T_FMT "] auth_ldap authorise: "
                                       "require user: authorisation successful", getpid());
+                        set_request_vars(r, sec, vals, 0);
                         return OK;
                     }
                     default: {
@@ -705,6 +825,7 @@ static int authz_ldap_check_user_access(request_rec *r)
                     ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
                                   "[%" APR_PID_T_FMT "] auth_ldap authorise: "
                                   "require dn: authorisation successful", getpid());
+                    set_request_vars(r, sec, vals, 0);
                     return OK;
                 }
                 default: {
@@ -755,6 +876,7 @@ static int authz_ldap_check_user_access(request_rec *r)
                                       "[%" APR_PID_T_FMT "] auth_ldap authorise: require group: "
                                       "authorisation successful (attribute %s) [%s][%s]",
                                       getpid(), ent[i].name, ldc->reason, ldap_err2string(result));
+                        set_request_vars(r, sec, vals, 0);
                         return OK;
                     }
                     default: {
@@ -763,6 +885,30 @@ static int authz_ldap_check_user_access(request_rec *r)
                                       "authorisation failed [%s][%s]",
                                       getpid(), t, ldc->reason, ldap_err2string(result));
                     }
+                }
+            }
+
+            if (sec->dynamic_groups) {
+                ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                              "[%" APR_PID_T_FMT "] auth_ldap authorise: require group: "
+                              "testing for dynamic group membership in \"%s\"",
+                              getpid(), t);
+                result = check_dynamic_groups(r, ldc, sec, req, "memberURL", t);
+                
+                switch (result) {
+                case LDAP_COMPARE_TRUE:
+                    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                                  "[%" APR_PID_T_FMT "] auth_ldap authorise: require dynamic group: "
+                                  "authorisation successful [%s][%s]",
+                                  getpid(), ldc->reason, ldap_err2string(result));
+                    set_request_vars(r, sec, vals, 0);
+                    return OK;
+                default:
+                    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                                  "[%" APR_PID_T_FMT "] auth_ldap authorise: require dynamic group \"%s\": "
+                                  "authorisation failed [%s][%s]",
+                                  getpid(), t, ldc->reason, ldap_err2string(result));
+                    break;
                 }
             }
         }
@@ -789,6 +935,7 @@ static int authz_ldap_check_user_access(request_rec *r)
                                       0, r, "[%" APR_PID_T_FMT "] auth_ldap authorise: "
                                       "require attribute: authorisation "
                                       "successful", getpid());
+                        set_request_vars(r, sec, vals, 0);
                         return OK;
                     }
                     default: {
@@ -815,7 +962,7 @@ static int authz_ldap_check_user_access(request_rec *r)
                               getpid(), t);
 
                 /* Build the username filter */
-                authn_ldap_build_filter(filtbuf, r, req->user, t, sec);
+                authn_ldap_build_filter(filtbuf, r, req->user, t, sec, 1);
 
                 /* Search for the user DN */
                 result = util_ldap_cache_getuserdn(r, ldc, sec->url, sec->basedn,
@@ -836,6 +983,7 @@ static int authz_ldap_check_user_access(request_rec *r)
                                       0, r, "[%" APR_PID_T_FMT "] auth_ldap authorise: "
                                       "require ldap-filter: authorisation "
                                       "successful", getpid());
+                        set_request_vars(r, sec, vals, 0);
                         return OK;
                     }
                     case LDAP_FILTER_ERROR: {
@@ -862,6 +1010,7 @@ static int authz_ldap_check_user_access(request_rec *r)
         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
                       "[%" APR_PID_T_FMT "] auth_ldap authorise: agreeing because non-restricted",
                       getpid());
+        set_request_vars(r, sec, vals, 0);
         return OK;
     }
 
@@ -987,9 +1136,7 @@ static const char *mod_auth_ldap_parse_url(cmd_parms *cmd,
                  urld->lud_port,
                  urld->lud_dn,
                  urld->lud_attrs? urld->lud_attrs[0] : "(null)",
-                 (urld->lud_scope == LDAP_SCOPE_SUBTREE? "subtree" :
-                  urld->lud_scope == LDAP_SCOPE_BASE? "base" :
-                  urld->lud_scope == LDAP_SCOPE_ONELEVEL? "onelevel" : "unknown"),
+                 SCOPE_TO_STR(urld->lud_scope),
                  urld->lud_filter,
                  sec->secure == APR_LDAP_SSL  ? "using SSL": "not using SSL"
                  );
@@ -1114,6 +1261,12 @@ static const command_rec authnz_ldap_cmds[] =
                  "subsequent group comparisons. If set to 'off', auth_ldap uses the string"
                  "provided by the client directly. Defaults to 'on'."),
 
+    AP_INIT_FLAG("AuthLDAPDynamicGroupLookup", ap_set_flag_slot,
+                 (void *)APR_OFFSETOF(authn_ldap_config_t, dynamic_groups), OR_AUTHCFG,
+                 "If set to 'on', auth_ldap will look for dynamic group URI in a group DN "
+                 "and attempt to see if a user is part of a group defined by that URI "
+                 "Defaults to 'off'."),
+
     AP_INIT_TAKE1("AuthLDAPDereferenceAliases", mod_auth_ldap_set_deref, NULL, OR_AUTHCFG,
                   "Determines how aliases are handled during a search. Can bo one of the"
                   "values \"never\", \"searching\", \"finding\", or \"always\". "
@@ -1226,6 +1379,7 @@ static void ImportULDAPOptFn(void)
     util_ldap_connection_find   = APR_RETRIEVE_OPTIONAL_FN(uldap_connection_find);
     util_ldap_cache_comparedn   = APR_RETRIEVE_OPTIONAL_FN(uldap_cache_comparedn);
     util_ldap_cache_compare     = APR_RETRIEVE_OPTIONAL_FN(uldap_cache_compare);
+    util_ldap_cache_getattrvals = APR_RETRIEVE_OPTIONAL_FN(uldap_cache_getattrvals);
     util_ldap_cache_checkuserid = APR_RETRIEVE_OPTIONAL_FN(uldap_cache_checkuserid);
     util_ldap_cache_getuserdn   = APR_RETRIEVE_OPTIONAL_FN(uldap_cache_getuserdn);
     util_ldap_ssl_supported     = APR_RETRIEVE_OPTIONAL_FN(uldap_ssl_supported);

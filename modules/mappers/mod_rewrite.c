@@ -493,11 +493,11 @@ static void do_rewritelog(request_rec *r, int level, char *perdir,
 
     logline = apr_psprintf(r->pool, "%s %s %s %s [%s/sid#%pp][rid#%pp/%s%s%s] "
                                     "(%d) %s%s%s%s" APR_EOL_STR,
-                           rhost ? rhost : "UNKNOWN-HOST",
-                           rname ? rname : "-",
-                           r->user ? (*r->user ? r->user : "\"\"") : "-",
+                           rhost ? ap_escape_logitem(r->pool, rhost) : "UNKNOWN-HOST",
+                           rname ? ap_escape_logitem(r->pool, rname) : "-",
+                           r->user ? (*r->user ? ap_escape_logitem(r->pool, r->user) : "\"\"") : "-",
                            current_logtime(r),
-                           ap_get_server_name(r),
+                           ap_escape_logitem(r->pool, ap_get_server_name(r)),
                            (void *)(r->server),
                            (void *)r,
                            r->main ? "subreq" : "initial",
@@ -507,7 +507,7 @@ static void do_rewritelog(request_rec *r, int level, char *perdir,
                            perdir ? "[perdir " : "",
                            perdir ? perdir : "",
                            perdir ? "] ": "",
-                           text);
+                           ap_escape_logitem(r->pool, text));
 
     nbytes = strlen(logline);
     apr_file_write(conf->rewritelogfp, logline, &nbytes);
@@ -4254,6 +4254,11 @@ static int hook_uri2file(request_rec *r)
      *  just stop operating now.
      */
     if (conf->server != r->server) {
+        return DECLINED;
+    }
+
+    if ((r->unparsed_uri[0] == '*' && r->unparsed_uri[1] == '\0')
+        || !r->uri || r->uri[0] != '/') {
         return DECLINED;
     }
 

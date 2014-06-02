@@ -365,6 +365,28 @@ static const char *set_balancer_param(proxy_server_conf *conf,
         else
             return "scolonpathdelim must be On|Off";
     }
+    else if (!strcasecmp(key, "failonstatus")) {
+        char *val_split;
+        char *status;
+        char *tok_state;
+
+        val_split = apr_pstrdup(p, val);
+
+        balancer->errstatuses = apr_array_make(p, 1, sizeof(int));
+
+        status = apr_strtok(val_split, ", ", &tok_state);
+        while (status != NULL) {
+            ival = atoi(status);
+            if (ap_is_HTTP_VALID_RESPONSE(ival)) {
+                *(int *)apr_array_push(balancer->errstatuses) = ival;
+            }
+            else {
+                return "failonstatus must be one or more HTTP response codes";
+            }
+            status = apr_strtok(NULL, ", ", &tok_state);
+        }
+
+    }
     else {
         return "unknown Balancer parameter";
     }
@@ -542,6 +564,11 @@ static int proxy_trans(request_rec *r)
          * in proxy_detect
          */
         return OK;
+    }
+
+    if ((r->unparsed_uri[0] == '*' && r->unparsed_uri[1] == '\0')
+        || !r->uri || r->uri[0] != '/') {
+        return DECLINED;
     }
 
     /* XXX: since r->uri has been manipulated already we're not really
@@ -1362,7 +1389,7 @@ static const char *
             if (err)
                 return apr_pstrcat(cmd->temp_pool, "ProxyPass ", err, NULL);
         } else {
-            ap_log_error(APLOG_MARK, APLOG_WARNING, 0, cmd->server,
+            ap_log_error(APLOG_MARK, APLOG_INFO, 0, cmd->server,
                          "worker %s already used by another worker", worker->name);
         }
         PROXY_COPY_CONF_PARAMS(worker, conf);
@@ -1779,7 +1806,7 @@ static const char *add_member(cmd_parms *cmd, void *dummy, const char *arg)
         if ((err = ap_proxy_add_worker(&worker, cmd->pool, conf, name)) != NULL)
             return apr_pstrcat(cmd->temp_pool, "BalancerMember ", err, NULL);
     } else {
-            ap_log_error(APLOG_MARK, APLOG_WARNING, 0, cmd->server,
+            ap_log_error(APLOG_MARK, APLOG_INFO, 0, cmd->server,
                          "worker %s already used by another worker", worker->name);
     }
     PROXY_COPY_CONF_PARAMS(worker, conf);
@@ -2220,14 +2247,7 @@ static int proxy_status_hook(request_rec *r, int flags)
             char fbuf[50];
             ap_rvputs(r, "<tr>\n<td>", worker->scheme, "</td>", NULL);
             ap_rvputs(r, "<td>", worker->hostname, "</td><td>", NULL);
-            if (worker->s->status & PROXY_WORKER_DISABLED)
-                ap_rputs("Dis", r);
-            else if (worker->s->status & PROXY_WORKER_IN_ERROR)
-                ap_rputs("Err", r);
-            else if (worker->s->status & PROXY_WORKER_INITIALIZED)
-                ap_rputs("Ok", r);
-            else
-                ap_rputs("-", r);
+            ap_rvputs(r, ap_proxy_parse_wstatus(r->pool, worker), NULL);
             ap_rvputs(r, "</td><td>", worker->s->route, NULL);
             ap_rvputs(r, "</td><td>", worker->s->redirect, NULL);
             ap_rprintf(r, "</td><td>%d</td>", worker->s->lbfactor);

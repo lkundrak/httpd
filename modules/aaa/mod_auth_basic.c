@@ -252,6 +252,14 @@ static int authenticate_basic_user(request_rec *r)
             return DECLINED;
         }
 
+        /* If no providers were configured, and the default file
+         * provider gave a general error (which will happen only if
+         * has not been configured), presume that a non-provider-based
+         * authn module is configured, and get out of the way. */
+        if (!conf->providers && auth_result == AUTH_GENERAL_ERROR) {
+            return DECLINED;
+        }
+
         switch (auth_result) {
         case AUTH_DENIED:
             ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,

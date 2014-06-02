@@ -548,7 +548,6 @@ static void ssl_print_info(struct connection *c)
         for (i=1; i<count; i++) {
             cert = (X509 *)SK_VALUE(sk, i);
             ssl_print_cert_info(bio_out, cert);
-            X509_free(cert);
     }
     }
     cert = SSL_get_peer_certificate(c->ssl);
@@ -1576,6 +1575,10 @@ static void test(void)
     con = calloc(concurrency, sizeof(struct connection));
 
     stats = calloc(requests, sizeof(struct data));
+
+    if (!con || !stats) {
+        err("Cannot allocate memory for result statistics");
+    }
 
     if ((status = apr_pollset_create(&readbits, concurrency, cntxt, 0)) != APR_SUCCESS) {
         apr_err("apr_pollset_create failed", status);

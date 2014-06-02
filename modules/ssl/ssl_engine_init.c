@@ -79,12 +79,23 @@ static int ssl_tmp_key_init_rsa(server_rec *s,
 {
     SSLModConfigRec *mc = myModConfig(s);
 
+#ifdef HAVE_FIPS
+    if (FIPS_mode() && bits < 1024) {
+        mc->pTmpKeys[idx] = NULL;
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, s,
+                     "Init: Skipping generating temporary "
+                     "%d bit RSA private key in FIPS mode", bits);
+        return OK;
+    }
+#endif
+
     if (!(mc->pTmpKeys[idx] =
           RSA_generate_key(bits, RSA_F4, NULL, NULL)))
     {
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, s,
                      "Init: Failed to generate temporary "
                      "%d bit RSA private key", bits);
+        ssl_log_ssl_error(APLOG_MARK, APLOG_ERR, s);
         return !OK;
     }
 
@@ -95,6 +106,16 @@ static int ssl_tmp_key_init_dh(server_rec *s,
                                int bits, int idx)
 {
     SSLModConfigRec *mc = myModConfig(s);
+
+#ifdef HAVE_FIPS
+    if (FIPS_mode() && bits < 1024) {
+        mc->pTmpKeys[idx] = NULL;
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, s,
+                     "Init: Skipping generating temporary "
+                     "%d bit DH parameters in FIPS mode", bits);
+        return OK;
+    }
+#endif
 
     if (!(mc->pTmpKeys[idx] =
           ssl_dh_GetTmpParam(bits)))
@@ -278,7 +299,7 @@ int ssl_init_Module(apr_pool_t *p, apr_pool_t *plog,
     /*
      * Configuration consistency checks
      */
-    ssl_init_CheckServers(base_server, ptemp);
+    ssl_init_CheckServers(mc, base_server, ptemp);
 
     /*
      *  Announce mod_ssl and SSL library in HTTP Server field
@@ -953,11 +974,19 @@ static void ssl_init_proxy_certs(server_rec *s,
     for (n = 0; n < ncerts; n++) {
         X509_INFO *inf = sk_X509_INFO_value(sk, n);
 
-        if (!inf->x509 || !inf->x_pkey) {
+        if (!inf->x509 || !inf->x_pkey || !inf->x_pkey->dec_pkey) {
             sk_X509_INFO_free(sk);
             ap_log_error(APLOG_MARK, APLOG_STARTUP, 0, s,
                          "incomplete client cert configured for SSL proxy "
                          "(missing or encrypted private key?)");
+            ssl_die();
+            return;
+        }
+        
+        if (X509_check_private_key(inf->x509, inf->x_pkey->dec_pkey) != 1) {
+            ap_log_error(APLOG_MARK, APLOG_STARTUP, 0, s,
+                           "proxy client certificate and "
+                           "private key do not match");
             ssl_die();
             return;
         }
@@ -1012,7 +1041,7 @@ void ssl_init_ConfigureServer(server_rec *s,
     }
 }
 
-void ssl_init_CheckServers(server_rec *base_server, apr_pool_t *p)
+void ssl_init_CheckServers(SSLModConfigRec *mc, server_rec *base_server, apr_pool_t *p)
 {
     server_rec *s, *ps;
     SSLSrvConfigRec *sc;
@@ -1098,6 +1127,7 @@ void ssl_init_CheckServers(server_rec *base_server, apr_pool_t *p)
     }
 
     if (conflict) {
+        mc->sni_required = TRUE;
         ap_log_error(APLOG_MARK, APLOG_WARNING, 0, base_server,
 #ifdef OPENSSL_NO_TLSEXT
                      "Init: You should not use name-based "
@@ -1250,6 +1280,7 @@ static void ssl_init_ctx_cleanup_proxy(modssl_ctx_t *mctx)
 
     if (mctx->pkp->certs) {
         sk_X509_INFO_pop_free(mctx->pkp->certs, X509_INFO_free);
+        mctx->pkp->certs = NULL;
     }
 }
 

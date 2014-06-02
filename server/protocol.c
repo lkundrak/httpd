@@ -667,6 +667,16 @@ static int read_request_line(request_rec *r, apr_bucket_brigade *bb)
     return 1;
 }
 
+/* get the length of the field name for logging, but no more than 80 bytes */
+#define LOG_NAME_MAX_LEN 80
+static int field_name_len(const char *field)
+{
+    const char *end = ap_strchr_c(field, ':');
+    if (end == NULL || end - field > LOG_NAME_MAX_LEN)
+        return LOG_NAME_MAX_LEN;
+    return end - field;
+}
+
 AP_DECLARE(void) ap_get_mime_headers_core(request_rec *r, apr_bucket_brigade *bb)
 {
     char *last_field = NULL;
@@ -701,12 +711,15 @@ AP_DECLARE(void) ap_get_mime_headers_core(request_rec *r, apr_bucket_brigade *bb
                 /* insure ap_escape_html will terminate correctly */
                 field[len - 1] = '\0';
                 apr_table_setn(r->notes, "error-notes",
-                               apr_pstrcat(r->pool,
+                               apr_psprintf(r->pool,
                                            "Size of a request header field "
                                            "exceeds server limit.<br />\n"
-                                           "<pre>\n",
-                                           ap_escape_html(r->pool, field),
-                                           "</pre>\n", NULL));
+                                           "<pre>\n%.*s\n</pre>/n",
+                                           field_name_len(field), 
+                                           ap_escape_html(r->pool, field)));
+                ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r, 
+                              "Request header exceeds LimitRequestFieldSize: "
+                              "%.*s", field_name_len(field), field);
             }
             return;
         }
@@ -727,13 +740,17 @@ AP_DECLARE(void) ap_get_mime_headers_core(request_rec *r, apr_bucket_brigade *bb
                      * overflow (last_field) as the field with the problem
                      */
                     apr_table_setn(r->notes, "error-notes",
-                                   apr_pstrcat(r->pool,
+                                   apr_psprintf(r->pool,
                                                "Size of a request header field "
                                                "after folding "
                                                "exceeds server limit.<br />\n"
-                                               "<pre>\n",
-                                               ap_escape_html(r->pool, last_field),
-                                               "</pre>\n", NULL));
+                                               "<pre>\n%.*s\n</pre>\n",
+                                               field_name_len(last_field),
+                                               ap_escape_html(r->pool, last_field)));
+                    ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r,
+                                  "Request header exceeds LimitRequestFieldSize "
+                                  "after folding: %.*s",
+                                  field_name_len(last_field), last_field);
                     return;
                 }
 
@@ -765,13 +782,18 @@ AP_DECLARE(void) ap_get_mime_headers_core(request_rec *r, apr_bucket_brigade *bb
                 if (!(value = strchr(last_field, ':'))) { /* Find ':' or    */
                     r->status = HTTP_BAD_REQUEST;      /* abort bad request */
                     apr_table_setn(r->notes, "error-notes",
-                                   apr_pstrcat(r->pool,
+                                   apr_psprintf(r->pool,
                                                "Request header field is "
                                                "missing ':' separator.<br />\n"
-                                               "<pre>\n",
+                                               "<pre>\n%.*s</pre>\n",
+                                               (int)LOG_NAME_MAX_LEN,
                                                ap_escape_html(r->pool,
-                                                              last_field),
-                                               "</pre>\n", NULL));
+                                                              last_field)));
+                    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                                  "Request header field is missing ':' "
+                                  "separator: %.*s", (int)LOG_NAME_MAX_LEN,
+                                  last_field);
+
                     return;
                 }
 
@@ -1641,7 +1663,8 @@ AP_DECLARE(void) ap_send_interim_response(request_rec *r, int send_headers)
 {
     hdr_ptr x;
     char *status_line = NULL;
-
+    request_rec *rr;
+ 
     if (r->proto_num < 1001) {
         /* don't send interim response to HTTP/1.0 Client */
         return;
@@ -1654,6 +1677,14 @@ AP_DECLARE(void) ap_send_interim_response(request_rec *r, int send_headers)
 
     status_line = apr_pstrcat(r->pool, AP_SERVER_PROTOCOL, " ", r->status_line, CRLF, NULL);
     ap_xlate_proto_to_ascii(status_line, strlen(status_line));
+
+    /* if we send an interim response, we're no longer in a state of
+     * expecting one.  Also, this could feasibly be in a subrequest,
+     * so we need to propagate the fact that we responded.
+     */
+    for (rr = r; rr != NULL; rr = rr->main) {
+        rr->expecting_100 = 0;
+    }
 
     x.f = r->connection->output_filters;
     x.bb = apr_brigade_create(r->pool, r->connection->bucket_alloc);

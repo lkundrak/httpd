@@ -92,7 +92,7 @@ static void stats(FILE *output);
 
 /* maximum line length */
 #ifndef MAXLINE
-#define MAXLINE 1024
+#define MAXLINE 10240
 #endif
 
 /* maximum length of a domain name */

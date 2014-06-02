@@ -365,7 +365,9 @@ static apr_status_t proxy_send_dir_filter(ap_filter_t *f,
                 " </head>\n"
                 " <body>\n  <h2>Directory of "
                 "<a href=\"/\">%s</a>/%s",
-                site, basedir, escpath, site, basedir, escpath, site, str);
+                ap_escape_html(p, site), basedir, escpath,
+                ap_escape_uri(p, site), basedir, escpath,
+                ap_escape_uri(p, site), str);
 
         APR_BRIGADE_INSERT_TAIL(out, apr_bucket_pool_create(str, strlen(str),
                                                           p, c->bucket_alloc));
@@ -981,7 +983,7 @@ static int proxy_ftp_handler(request_rec *r, proxy_worker *worker,
     }
 
     /* check if ProxyBlock directive on this host */
-    if (OK != ap_proxy_checkproxyblock(r, conf, connect_addr)) {
+    if (OK != ap_proxy_checkproxyblock2(r, conf, connectname, connect_addr)) {
         return ap_proxyerror(r, HTTP_FORBIDDEN,
                              "Connect to remote machine blocked");
     }
@@ -1250,7 +1252,11 @@ static int proxy_ftp_handler(request_rec *r, proxy_worker *worker,
                        "proxy: FTP: EPSV contacting remote host on port %d",
                              data_port);
 
-                if ((rv = apr_socket_create(&data_sock, connect_addr->family, SOCK_STREAM, 0, r->pool)) != APR_SUCCESS) {
+                rv = apr_socket_addr_get(&data_addr, APR_REMOTE, sock);
+                if (rv == APR_SUCCESS) {
+                    rv = apr_socket_create(&data_sock, data_addr->family, SOCK_STREAM, 0, r->pool);
+                }
+                if (rv != APR_SUCCESS) {
                     ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
                                   "proxy: FTP: error creating EPSV socket");
                     proxy_ftp_cleanup(r, backend);
@@ -1273,10 +1279,11 @@ static int proxy_ftp_handler(request_rec *r, proxy_worker *worker,
                 }
 
                 /* make the connection */
-                apr_socket_addr_get(&data_addr, APR_REMOTE, sock);
-                apr_sockaddr_ip_get(&data_ip, data_addr);
-                apr_sockaddr_info_get(&epsv_addr, data_ip, connect_addr->family, data_port, 0, p);
-                rv = apr_socket_connect(data_sock, epsv_addr);
+                rv = apr_sockaddr_ip_get(&data_ip, data_addr);
+                if (rv == APR_SUCCESS)
+                    apr_sockaddr_info_get(&epsv_addr, data_ip, data_addr->family, data_port, 0, p);
+                if (rv == APR_SUCCESS)
+                    rv = apr_socket_connect(data_sock, epsv_addr);
                 if (rv != APR_SUCCESS) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, rv, r->server,
                                  "proxy: FTP: EPSV attempt to connect to %pI failed - Firewall/NAT?", epsv_addr);

@@ -473,7 +473,8 @@ static int cache_save_filter(ap_filter_t *f, apr_bucket_brigade *in)
          * We include 304 Not Modified here too as this is the origin server
          * telling us to serve the cached copy.
          */
-        if (exps != NULL || cc_out != NULL) {
+        if ((exps != NULL || cc_out != NULL)
+            && r->status != HTTP_PARTIAL_CONTENT) {
             /* We are also allowed to cache any response given that it has a
              * valid Expires or Cache Control header. If we find a either of
              * those here,  we pass request through the rest of the tests. From
@@ -486,6 +487,9 @@ static int cache_save_filter(ap_filter_t *f, apr_bucket_brigade *in)
              * include the following: an Expires header (section 14.21); a
              * "max-age", "s-maxage",  "must-revalidate", "proxy-revalidate",
              * "public" or "private" cache-control directive (section 14.9).
+             *
+             * But do NOT store 206 responses in any case since we
+             * don't (yet) cache partial responses.
              */
         }
         else {
@@ -583,6 +587,62 @@ static int cache_save_filter(ap_filter_t *f, apr_bucket_brigade *in)
     else if (r->no_cache) {
         /* or we've been asked not to cache it above */
         reason = "r->no_cache present";
+    }
+
+    /* Hold the phone. Some servers might allow us to cache a 2xx, but
+     * then make their 304 responses non cacheable. This leaves us in a
+     * sticky position. If the 304 is in answer to our own conditional
+     * request, we cannot send this 304 back to the client because the
+     * client isn't expecting it. Instead, our only option is to respect
+     * the answer to the question we asked (has it changed, answer was
+     * no) and return the cached item to the client, and then respect
+     * the uncacheable nature of this 304 by allowing the remove_url
+     * filter to kick in and remove the cached entity.
+     */
+    if (reason && r->status == HTTP_NOT_MODIFIED &&
+             cache->stale_handle) {
+        apr_bucket_brigade *bb;
+        apr_bucket *bkt;
+        int status;
+
+        cache->handle = cache->stale_handle;
+        info = &cache->handle->cache_obj->info;
+
+        /* Load in the saved status and clear the status line. */
+        r->status = info->status;
+        r->status_line = NULL;
+
+        bb = apr_brigade_create(r->pool, r->connection->bucket_alloc);
+
+        r->headers_in = cache->stale_headers;
+        status = ap_meets_conditions(r);
+        if (status != OK) {
+            r->status = status;
+
+            bkt = apr_bucket_flush_create(bb->bucket_alloc);
+            APR_BRIGADE_INSERT_TAIL(bb, bkt);
+        }
+        else {
+            /* RFC 2616 10.3.5 states that entity headers are not supposed
+             * to be in the 304 response.  Therefore, we need to combine the
+             * response headers with the cached headers *before* we update
+             * the cached headers.
+             *
+             * However, before doing that, we need to first merge in
+             * err_headers_out and we also need to strip any hop-by-hop
+             * headers that might have snuck in.
+             */
+            r->headers_out = ap_cache_cacheable_hdrs_out(r->pool, r->headers_out, r->server);
+
+            /* Merge in our cached headers.  However, keep any updated values. */
+            ap_cache_accept_headers(cache->handle, r, 1);
+
+            cache->provider->recall_body(cache->handle, r->pool, bb);
+        }
+
+        cache->block_response = 1;
+
+        return ap_pass_brigade(f->next, bb);
     }
 
     if (reason) {
@@ -802,6 +862,11 @@ static int cache_save_filter(ap_filter_t *f, apr_bucket_brigade *in)
             exp = date + conf->defex;
         }
     }
+    /* else, forcibly cap the expiry date if required */
+    else if (conf->hardmaxex && (date + conf->maxex) < exp) {
+        exp = date + conf->maxex;
+    }        
+
     info->expire = exp;
 
     /* We found a stale entry which wasn't really stale. */
@@ -1018,6 +1083,9 @@ static void * create_cache_config(apr_pool_t *p, server_rec *s)
         ps->lockpath = apr_pstrcat(p, tmppath, DEFAULT_CACHE_LOCKPATH, NULL);
     }
     ps->lockmaxage = apr_time_from_sec(DEFAULT_CACHE_MAXAGE);
+    /* flag; treat maxex as hard limit */
+    ps->hardmaxex = 0;
+    ps->hardmaxex_set = 0;
     return ps;
 }
 
@@ -1083,6 +1151,10 @@ static void * merge_cache_config(apr_pool_t *p, void *basev, void *overridesv)
         (overrides->lockmaxage_set == 0)
         ? base->lockmaxage
         : overrides->lockmaxage;
+    ps->hardmaxex = 
+        (overrides->hardmaxex_set == 0)
+        ? base->hardmaxex
+        : overrides->hardmaxex;
     return ps;
 }
 static const char *set_cache_ignore_no_last_mod(cmd_parms *parms, void *dummy,
@@ -1247,7 +1319,7 @@ static const char *add_cache_disable(cmd_parms *parms, void *dummy,
 }
 
 static const char *set_cache_maxex(cmd_parms *parms, void *dummy,
-                                   const char *arg)
+                                   const char *arg, const char *hard)
 {
     cache_server_conf *conf;
 
@@ -1256,6 +1328,12 @@ static const char *set_cache_maxex(cmd_parms *parms, void *dummy,
                                                   &cache_module);
     conf->maxex = (apr_time_t) (atol(arg) * MSEC_ONE_SEC);
     conf->maxex_set = 1;
+    
+    if (hard && strcasecmp(hard, "hard") == 0) {
+        conf->hardmaxex = 1;
+        conf->hardmaxex_set = 1;
+    }
+
     return NULL;
 }
 
@@ -1381,7 +1459,7 @@ static const command_rec cache_cmds[] =
                   "caching is enabled"),
     AP_INIT_TAKE1("CacheDisable", add_cache_disable, NULL, RSRC_CONF,
                   "A partial URL prefix below which caching is disabled"),
-    AP_INIT_TAKE1("CacheMaxExpire", set_cache_maxex, NULL, RSRC_CONF,
+    AP_INIT_TAKE12("CacheMaxExpire", set_cache_maxex, NULL, RSRC_CONF,
                   "The maximum time in seconds to cache a document"),
     AP_INIT_TAKE1("CacheDefaultExpire", set_cache_defex, NULL, RSRC_CONF,
                   "The default time in seconds to cache a document"),

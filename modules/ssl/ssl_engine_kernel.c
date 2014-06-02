@@ -117,6 +117,7 @@ int ssl_hook_ReadReq(request_rec *r)
         return DECLINED;
     }
 #ifndef OPENSSL_NO_TLSEXT
+    if (myModConfig(r->server)->sni_required) {
     if ((servername = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name))) {
         char *host, *scope_id;
         apr_port_t port;
@@ -159,6 +160,7 @@ int ssl_hook_ReadReq(request_rec *r)
                      "No hostname was provided via SNI for a name based"
                      " virtual host");
         return HTTP_FORBIDDEN;
+    }
     }
 #endif
     SSL_set_app_data2(ssl, r);

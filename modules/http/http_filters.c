@@ -153,8 +153,9 @@ static apr_status_t get_remaining_chunk_line(http_ctx_t *ctx,
     if (lineend[len - 1] != APR_ASCII_LF) {
         return APR_EAGAIN;
     }
-    /* Line is complete. So reset ctx->linesize for next round. */
+    /* Line is complete. So reset ctx for next round. */
     ctx->linesize = 0;
+    ctx->pos = ctx->chunk_ln;
     return APR_SUCCESS;
 }
 
@@ -331,6 +332,10 @@ apr_status_t ap_http_filter(ap_filter_t *f, apr_bucket_brigade *b,
                 char *tmp;
                 int len;
 
+                /* if we send an interim response, we're no longer
+                 * in a state of expecting one.
+                 */
+                f->r->expecting_100 = 0;
                 tmp = apr_pstrcat(f->r->pool, AP_SERVER_PROTOCOL, " ",
                                   ap_get_status_line(100), CRLF CRLF, NULL);
                 len = strlen(tmp);
@@ -811,12 +816,21 @@ static void validate_status_line(request_rec *r)
 {
     char *end;
 
-    if (r->status_line
-        && (strlen(r->status_line) <= 4
+    if (r->status_line) {
+        int len = strlen(r->status_line);
+        if (len < 3
             || apr_strtoi64(r->status_line, &end, 10) != r->status
-            || *end != ' '
-            || (end - 3) != r->status_line)) {
-        r->status_line = NULL;
+            || (end - 3) != r->status_line
+            || (len >= 4 && ! apr_isspace(r->status_line[3]))) {
+            r->status_line = NULL;
+        }
+        /* Since we passed the above check, we know that length three
+         * is equivalent to only a 3 digit numeric http status.
+         * RFC2616 mandates a trailing space, let's add it.
+         */
+        else if (len == 3) {
+            r->status_line = apr_pstrcat(r->pool, r->status_line, " ", NULL);
+        }
     }
 }
 
@@ -942,37 +956,11 @@ AP_DECLARE(void) ap_basic_http_header(request_rec *r, apr_bucket_brigade *bb)
     basic_http_header(r, bb, protocol);
 }
 
-/* Navigator versions 2.x, 3.x and 4.0 betas up to and including 4.0b2
- * have a header parsing bug.  If the terminating \r\n occur starting
- * at offset 256, 257 or 258 of output then it will not properly parse
- * the headers.  Curiously it doesn't exhibit this problem at 512, 513.
- * We are guessing that this is because their initial read of a new request
- * uses a 256 byte buffer, and subsequent reads use a larger buffer.
- * So the problem might exist at different offsets as well.
- *
- * This should also work on keepalive connections assuming they use the
- * same small buffer for the first read of each new request.
- *
- * At any rate, we check the bytes written so far and, if we are about to
- * tickle the bug, we instead insert a bogus padding header.  Since the bug
- * manifests as a broken image in Navigator, users blame the server.  :(
- * It is more expensive to check the User-Agent than it is to just add the
- * bytes, so we haven't used the BrowserMatch feature here.
- */
 static void terminate_header(apr_bucket_brigade *bb)
 {
-    char tmp[] = "X-Pad: avoid browser bug" CRLF;
     char crlf[] = CRLF;
-    apr_off_t len;
     apr_size_t buflen;
 
-    (void) apr_brigade_length(bb, 1, &len);
-
-    if (len >= 255 && len <= 257) {
-        buflen = strlen(tmp);
-        ap_xlate_proto_to_ascii(tmp, buflen);
-        apr_brigade_write(bb, NULL, NULL, tmp, buflen);
-    }
     buflen = strlen(crlf);
     ap_xlate_proto_to_ascii(crlf, buflen);
     apr_brigade_write(bb, NULL, NULL, crlf, buflen);
