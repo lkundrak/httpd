@@ -289,6 +289,8 @@ typedef struct deflate_ctx_t
     z_stream stream;
     unsigned char *buffer;
     unsigned long crc;
+    unsigned char crc_data[8];
+    int crc_len;
     apr_bucket_brigade *bb, *proc_bb;
     int (*libz_end_func)(z_streamp);
     unsigned char *validation_buffer;
@@ -912,16 +914,24 @@ static apr_status_t deflate_in_filter(ap_filter_t *f,
                 APR_BRIGADE_INSERT_TAIL(ctx->proc_bb, tmp_heap);
                 ctx->stream.avail_out = c->bufferSize;
 
-                /* Is the remaining 8 bytes already in the avail stream? */
-                if (ctx->stream.avail_in >= 8) {
+                /* Read out what's available of the remaining 8 bytes already from the avail stream */
+                if (ctx->stream.avail_in + ctx->crc_len >= 8) {
+                    memcpy(&ctx->crc_data[ctx->crc_len], ctx->stream.next_in, 8 - ctx->crc_len);
+                    ctx->crc_len = 8;
+                } else {
+                    memcpy(&ctx->crc_data[ctx->crc_len], ctx->stream.next_in, ctx->stream.avail_in);
+                    ctx->crc_len += ctx->stream.avail_in;
+                }
+
+                /* Already read all of the trailing 8 bytes from the stream? */
+                if (ctx->crc_len == 8) {
                     unsigned long compCRC, compLen;
-                    compCRC = getLong(ctx->stream.next_in);
+                    compCRC = getLong(ctx->crc_data);
                     if (ctx->crc != compCRC) {
                         inflateEnd(&ctx->stream);
                         return APR_EGENERAL;
                     }
-                    ctx->stream.next_in += 4;
-                    compLen = getLong(ctx->stream.next_in);
+                    compLen = getLong(&ctx->crc_data[4]);
                     /* gzip stores original size only as 4 byte value */
                     if ((ctx->stream.total_out & 0xFFFFFFFF) != compLen) {
                         inflateEnd(&ctx->stream);
@@ -929,10 +939,7 @@ static apr_status_t deflate_in_filter(ap_filter_t *f,
                     }
                 }
                 else {
-                    /* FIXME: We need to grab the 8 verification bytes
-                     * from the wire! */
-                    inflateEnd(&ctx->stream);
-                    return APR_EGENERAL;
+                    break;
                 }
 
                 inflateEnd(&ctx->stream);
